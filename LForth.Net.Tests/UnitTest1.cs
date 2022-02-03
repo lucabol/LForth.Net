@@ -68,6 +68,19 @@ public class UnitTest1
             i++;
         }
     }
+    [Fact]
+    public void DataSpaceWorks()
+    {
+        var vm = new Vm();
+        vm.Here();
+        var here = vm.Pop();
+
+        vm.Push(10);
+        vm.Comma();
+        vm.Push(here);
+        vm.At();
+        Assert.Equal(10, vm.Pop());
+    }
     public static IEnumerable<object[]> GetData7Bit() =>
         new (long, long)[] { (0, 1), (-1, 1), (+1, 1), (-900, 2), (-100_000, 3), (long.MaxValue, 10), (long.MinValue, 10) }
         .Select(t => new object[] {t.Item1, t.Item2});

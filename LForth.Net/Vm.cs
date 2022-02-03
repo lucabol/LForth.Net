@@ -15,7 +15,8 @@ using static Forth.Utils;
  **/
 
 public enum Op {
-    Colo, Semi, Does, Numb, Plus, Minu, Mult, Divi, Prin
+    Colo, Semi, Does, Numb, Plus, Minu, Mult, Divi, Prin,
+    Count, Word, Refill, Comma, Here, At, Store
 }
 
 public class Vm {
@@ -60,7 +61,7 @@ public class Vm {
     Index    cp = 0;
     Code[]   cs;
 
-    /** Words in Forth are pointers to code (and memory), plus metadata. They are kept in a list, which
+    /** User defined words in Forth are pointers to code (and memory), plus metadata. They are kept in a list, which
      * makes retrieval slower, but allows multiple copies with the same name, which seems necessary at times.
      * Perhaps an hashtable woould work as well, and be faster, but staying safe for now.
      * Again, ANS Forth allows this, instead of the traditional way of keeping a linked list of Words in the
@@ -144,6 +145,27 @@ public class Vm {
                     n = Pop();
                     Console.Write($"{n} ");
                     break;
+                case Op.Count:
+                    Count();
+                    break;
+                case Op.Refill:
+                    Refill();
+                    break;
+                case Op.Word:
+                    WordW();
+                    break;
+                case Op.Comma:
+                    Comma();
+                    break;
+                case Op.Here:
+                    Here();
+                    break;
+                case Op.At:
+                    At();
+                    break;
+                case Op.Store:
+                    Store();
+                    break;
                 default:
                     Throw($"{((Op)op).ToString()} bytecode not supported.");
                     break;
@@ -151,14 +173,17 @@ public class Vm {
         }
     }
     /** These are internal to be able to test them. What a bother. **/
-    internal void Push(Cell n) => ps = Utils.Add(ps, ref sp, n);
+    internal void Push(Cell n)  => ps = Utils.Add(ps, ref sp, n);
     internal Cell Pop()         => Utils.ReadBeforeIndex(ps, ref sp);
-    internal Cell Peek()         => Utils.ReadCell(ps, sp - CELL_SIZE);
+    internal Cell Peek()        => Utils.ReadCell(ps, sp - CELL_SIZE);
 
     internal void RPush(Cell n) => rs = Utils.Add(rs, ref rp, n);
     internal Cell RPop()        => Utils.ReadBeforeIndex(rs, ref rp);
 
-    internal void Comma(Cell n)    => ds = Utils.Add(ds, ref here_p, n);
+    internal void Comma()       => ds = Utils.Add(ds, ref here_p, Pop());
+    internal void Store()       => Utils.WriteCell(ds, (Index)Pop(), Pop());
+    internal void At()          => Push(Utils.ReadCell(ds, (Index)Pop()));
+    internal void Here()        => Push(here_p);
 
     /** Refill fills out the input buffer at source, translating from UTF16 (.net) to UTF8 (what I want).
      * It would be nice to have a separate segment for strings, but Forth requires them to be store in the
