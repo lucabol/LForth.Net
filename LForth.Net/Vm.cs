@@ -18,19 +18,15 @@ public enum Op {
     Colo, Semi, Does, Numb, Plus, Minu, Mult, Divi, Prin
 }
 
-/** Why is this a struct? No real reason. It would work as a class as well. I did measure perf of
- * calling an instance method on both class, struct and extension methods. It looks like struct instance
- * methods are a bit faster. This is the tight inner loop, so such small perf wins are welcome.
- **/
-public struct Vm {
+public class Vm {
 
     /** Forth true and false bizarre definition. **/
     const Cell TRUE  = -1;
     const Cell FALSE = 0;
 
     /** Sizes of data types. **/
-    const Index CHAR_SIZE = 1;
-    const Index CELL_SIZE = sizeof(Cell);
+    internal const Index CHAR_SIZE = 1;
+    internal const Index CELL_SIZE = sizeof(Cell);
 
     /** There are a lot of buffers in Forth that needs to be represented in data space, because
      * you can store their address on the stack. Read a Forth book to understand them.
@@ -52,9 +48,9 @@ public struct Vm {
     Index sp  = 0;
     Index rp  = 0;
     Index here_p  = 0;
-    Cell[] ps;
-    Cell[] rs;
-    Cell[] ds;
+    AUnit[] ps;
+    AUnit[] rs;
+    AUnit[] ds;
 
     /** The code stack is separate from the data stack, differently than in classic Forth. This is mainly
      * because instruction opcodes are smaller than cells.They can be indexed more easily if kept separate.
@@ -93,9 +89,9 @@ public struct Vm {
 
         nextLine = getLine;
 
-        ps   = new Cell[maxParameterStack];
-        rs   = new Cell[maxReturnStack];
-        ds   = new Cell[maxDataStack];
+        ps   = new AUnit[maxParameterStack];
+        rs   = new AUnit[maxReturnStack];
+        ds   = new AUnit[maxDataStack];
         cs   = new Code[maxCodeStack];
         dict = new (maxDictionary);
 
@@ -155,27 +151,20 @@ public struct Vm {
         }
     }
     /** These are internal to be able to test them. What a bother. **/
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void Push(Cell n)  => ps[sp++] = n;
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal Cell Pop()         => ps[sp--];
+    internal void Push(Cell n) => ps = Utils.Add(ps, ref sp, n);
+    internal Cell Pop()         => Utils.ReadBeforeIndex(ps, ref sp);
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void RPush(Cell n) => rs[rp++] = n;
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal Cell RPop()        => rs[rp--];
+    internal void RPush(Cell n) => rs = Utils.Add(rs, ref rp, n);
+    internal Cell RPop()        => Utils.ReadBeforeIndex(rs, ref rp);
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void Comma(Cell n)    => ds[here_p++] = n;
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal Cell UnComma()        => ds[here_p--];
+    internal void Comma(Cell n)    => ds = Utils.Add(ds, ref here_p, n);
 
     /** Refill fills out the input buffer at source, translating from UTF16 (.net) to UTF8 (what I want).
      * It would be nice to have a separate segment for strings, but Forth requires them to be store in the
      * Data Store, despite that been an array of long/ints generally. That is to allow mixed data structures
      * containing both strings and values.
      **/
-    void Refill()
+    internal void Refill()
     {
         if(nextLine == null) Throw("Trying to Refill, without having passed a nextLine func");
 
@@ -187,65 +176,96 @@ public struct Vm {
         }
         else
         {
-            var len = inputBuffer.Length;
-            if (len > source_max_chars)
+            input_len_chars = Encoding.UTF8.GetByteCount(inputBuffer);
+            if (input_len_chars > source_max_chars)
                 throw new Exception(
-                $"Cannot parse a line longer than {source_max_chars}. {inputBuffer} is {len} chars long.");
-            var inputCharSpan = ToChars(source, source_max_chars);
+                $"Cannot parse a line longer than {source_max_chars}. {inputBuffer} is {input_len_chars} chars long.");
+            var inputCharSpan = ToChars(source, input_len_chars);
             var bytes = new Span<byte>(Encoding.UTF8.GetBytes(inputBuffer));
             bytes.CopyTo(inputCharSpan);
             ds[inp] = 0;
-            input_len_chars = len;
             Push(TRUE);
         }
     }
-    /*
-    void wordW(ref Vm vm, bool inKeyword = false)
+    /** This is just for testing **/
+    internal string InputBufferToString()
     {
-        var delim = (char)pop(ref vm);
-        var s = ToChars(ref vm, vm.source, vm.input_len_chars);
-        var toPtr = inKeyword ? vm.keyWord : vm.word;
+        var utf8 = ToChars(source, input_len_chars);
+        return Encoding.UTF8.GetString(utf8);
+    }
+    void Dup() => Push(ps[sp++]);
 
-        var w = ToChars(ref vm, toPtr, vm.word_max_chars);
+    /** It is implemented like this to avoid endianess problems **/
+    void CFetch()
+    {
+        var c = (Index)Pop();
+        var sl = new Span<AUnit>(ds, c, 1);
+        Push(sl[0]);
+    }
 
-        var j = 1; // It is a counted string, the first 2 bytes contains the length
+    void Count()
+    {
+        var start = (Index) Pop();
+        
+    }
+    /** TODO: the delimiter in this implemenation (and Forth) as to be one byte char, but UTF8 puts that into question **/
+    internal void WordW(bool inKeyword = false)
+    {
+        var delim = (byte)Pop();
+        var s = ToChars(source, input_len_chars);
+        var toPtr = inKeyword ? keyWord : word;
 
-        ref var inp = ref vm.ds[vm.inp];
+        var w = ToChars(toPtr, word_max_chars);
 
-        while (inp < vm.input_len_chars && s[inp] == delim) { inp++; }
+        var j = 1; // It is a counted string, the first byte contains the length
+
+        ref var index = ref ds[this.inp];
+
+        while (index < input_len_chars && s[(Index)index] == delim) { index++; }
 
         // If all spaces to the end of the input, return a string with length 0. 
-        if (inp >= vm.input_len_chars)
+        if (index >= input_len_chars)
         {
-            w[0] = (char)0;
-            push(ref vm, toPtr);
+            w[0] = (byte)0;
+            Push(toPtr);
             return;
         }
 
         // Copy chars until end of space allocated, end of buffer or delim.
-        while (j < vm.word_max_chars && inp < vm.input_len_chars && s[inp] != delim)
+        while (j < word_max_chars && index < input_len_chars && s[(Index)index] != delim)
         {
-            var c = s[inp++];
+            var c = s[(Index)index];
+            index++;
             w[j++] = c;
         }
         // Points past the delimiter. Otherwise it would stay on last " of a string.
-        if(inp < vm.input_len_chars) inp++;
-        if (j >= vm.word_max_chars) throw new Exception($"Word longer than {vm.word_max_chars}: {s}");
+        if(index < input_len_chars) index++;
+        if (j >= word_max_chars) throw new Exception($"Word longer than {word_max_chars}: {Encoding.UTF8.GetString(s)}");
 
-        w[0] = (char)(j - 1);  // len goes into the first char
-        push(ref vm, toPtr);
+        w[0] = (byte)(j - 1);  // len goes into the first char
+        Push(toPtr);
     }
-    */
-    Span<byte> ToChars(Index start, Index lenInChars) {
-        var cellSpan = ds.AsSpan(start, lenInChars / CELL_SIZE + 1);
-        return MemoryMarshal.Cast<Cell, byte>(cellSpan);
-    }
+    Span<byte> ToChars(Index start, Index lenInBytes)
+            => new Span<AUnit>(ds, start, lenInBytes);
 }
 
 static class Utils {
-    static void Add<T>(this T[] a, Index i, T t) {
-        if(a.Length == i) Array.Resize(ref a, i * 2);
-        a[i] = t;
+    internal static void WriteCell(AUnit[] ar, Index i, Cell c)
+        => MemoryMarshal.Write(new Span<byte>(ar, i, Vm.CELL_SIZE), ref c);
+
+    internal static Cell ReadCell(AUnit[] ar, Index i)
+        => MemoryMarshal.Read<Cell>(new Span<byte>(ar, i, Vm.CELL_SIZE));
+
+    internal static AUnit[] Add(AUnit[] a, ref Index i, Cell t) {
+        if(i + Vm.CELL_SIZE >= a.Length) Array.Resize(ref a, i * 2);
+        WriteCell(a, i, t);        
+        i += Vm.CELL_SIZE;
+        return a;
+    }
+    internal static Cell ReadBeforeIndex(AUnit[] a, ref Index i)
+    {
+        i -= Vm.CELL_SIZE;
+        return ReadCell(a, i);
     }
     internal static void Throw(string message) => throw new Exception(message);
 

@@ -7,6 +7,7 @@ global using Index     = System.Int32;
 #endif
 
 global using Code    = System.Byte;
+global using AUnit   = System.Byte;
 
 global using System.Globalization;
 global using System.Text;
