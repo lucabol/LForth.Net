@@ -153,6 +153,7 @@ public class Vm {
     /** These are internal to be able to test them. What a bother. **/
     internal void Push(Cell n) => ps = Utils.Add(ps, ref sp, n);
     internal Cell Pop()         => Utils.ReadBeforeIndex(ps, ref sp);
+    internal Cell Peek()         => Utils.ReadCell(ps, sp - CELL_SIZE);
 
     internal void RPush(Cell n) => rs = Utils.Add(rs, ref rp, n);
     internal Cell RPop()        => Utils.ReadBeforeIndex(rs, ref rp);
@@ -187,12 +188,12 @@ public class Vm {
             Push(TRUE);
         }
     }
-    /** This is just for testing **/
-    internal string InputBufferToString()
+    internal void Source()
     {
-        var utf8 = ToChars(source, input_len_chars);
-        return Encoding.UTF8.GetString(utf8);
+        Push(source);
+        Push(input_len_chars);
     }
+
     void Dup() => Push(ps[sp++]);
 
     /** It is implemented like this to avoid endianess problems **/
@@ -203,10 +204,18 @@ public class Vm {
         Push(sl[0]);
     }
 
-    void Count()
+    internal void Count()
     {
         var start = (Index) Pop();
-        
+        Push(start + 1);
+        Push(ds[start]);
+    }
+    internal string ToDotNetString()
+    {
+        var c = (Index)Pop();
+        var a = (Index)Pop();
+        var s = new Span<AUnit>(ds, a, c);
+        return Encoding.UTF8.GetString(s);
     }
     /** TODO: the delimiter in this implemenation (and Forth) as to be one byte char, but UTF8 puts that into question **/
     internal void WordW(bool inKeyword = false)

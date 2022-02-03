@@ -46,7 +46,8 @@ public class UnitTest1
         vm.Refill();
         var flag = vm.Pop();
         Assert.Equal(-1, flag);
-        Assert.Equal(s, vm.InputBufferToString());
+        vm.Source();
+        Assert.Equal(s, vm.ToDotNetString());
     }
     [Theory]
     [MemberData(nameof(GetDataWord))]
@@ -56,7 +57,16 @@ public class UnitTest1
         vm.Refill();
         var flag = vm.Pop();
         Assert.Equal(-1, flag);
-        Assert.Equal(s, vm.InputBufferToString());
+        var i = 0;
+        while(true)
+        {
+            vm.Push(' ');
+            vm.WordW();
+            vm.Count();
+            if(vm.Peek() == 0) break;
+            Assert.Equal(words[i], vm.ToDotNetString());
+            i++;
+        }
     }
     public static IEnumerable<object[]> GetData7Bit() =>
         new (long, long)[] { (0, 1), (-1, 1), (+1, 1), (-900, 2), (-100_000, 3), (long.MaxValue, 10), (long.MinValue, 10) }
@@ -66,5 +76,6 @@ public class UnitTest1
     public static IEnumerable<object[]> GetDataRefill() =>
             new string[] {"", "a", " ab bb "}.Select(o => new object[] { o });
     public static IEnumerable<object[]> GetDataWord() =>
-            new (string, string[])[] {("",new string[] {"" }), ("a", new string[]{"a"}), (" ab bb ", new string[] {"ab", "bb"})}.Select(t => new object[] { t.Item1, t.Item2 });
+            new (string, string[])[] {("",new string[] {""}), ("a", new string[]{"a"}), ("ab   ", new string[]{"ab"}),
+                (" ab", new string[]{"ab"}), ("  ab bb  ", new string[] {"ab", "bb"})}.Select(t => new object[] { t.Item1, t.Item2 });
 }
