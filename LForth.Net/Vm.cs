@@ -21,10 +21,13 @@ public enum Op {
     Count, Word, Refill, Comma, Here, At, Store,
     State,
     Bl,
-    Call
+    Call,
+    Dup
 }
 
 public class Vm {
+    /** Enable debug to see the generated opcodes **/
+    public bool Debug { get ; set; }
 
     /** Forth true and false bizarre definition. **/
     const Cell TRUE  = -1;
@@ -86,9 +89,20 @@ public class Vm {
     /** There are some words that directly maps to single opcodes **/
     readonly Dictionary<string, Op> WordToSimpleOp = new()
     {
-        { "."   , Op.Prin },
-        { "bl"  , Op.Bl }
+        { "."           , Op.Prin },
+        { "count"       , Op.Count },
+        { "refill"      , Op.Refill },
+        { "word"        , Op.Word },
+        { ","           , Op.Comma },
+        { "here"        , Op.Here },
+        { "@"           , Op.At },
+        { "!"           , Op.Store },
+        { "state"       , Op.State },
+        { "bl"          , Op.Bl }
     };
+
+    /** While other words need to perfom more complicated actions at compile time **/
+    readonly Dictionary<string, Action> WordToDef = new();
 
     /** This is implemented as a callback, instead of one of the existing .net interfaces to read text
      * so that we can inject special behavior before of after reading the line from file or console.
@@ -138,6 +152,12 @@ public class Vm {
 
         state   = here_p;
         here_p += CELL_SIZE;
+
+        WordToDef = new()
+        {
+            { "debug", () => Debug = !Debug },
+            { "bye", () => Environment.Exit(0) }
+        };
     }
     public void Reset()
     {
@@ -163,8 +183,8 @@ public class Vm {
     void PushOp(Op op) => cs[cp++] = (Code)op;
     void PushOp(Op op, Cell value)
     {
-        var ip = cp;
-        PushOp(Op.Numb);
+        ip = cp;
+        PushOp(op);
         Write7BitEncodedCell(cs, cp, value, out Index howMany);
         cp += howMany;
     }
@@ -186,6 +206,11 @@ public class Vm {
         {
             PushOp(op);
             if(Executing) Execute();
+            return true;
+        }
+        if(WordToDef.TryGetValue(sl, out var def))
+        {
+            def();
             return true;
         }
         return false;
@@ -266,6 +291,9 @@ public class Vm {
                 break;
             case Op.Bl:
                 Bl();
+                break;
+            case Op.Dup:
+                Dup();
                 break;
             default:
                 Throw($"{(Op)op} bytecode not supported.");

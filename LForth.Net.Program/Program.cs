@@ -12,12 +12,14 @@ while(true)
         ColorLine(ConsoleColor.Red, e.Message);
         vm.Reset();
     } catch(ArgumentOutOfRangeException e) {
-        ColorLine(ConsoleColor.Red, "Possible (because it is expensive to be sure) stack underflow. Did you have enough items on the stack?");
-        ColorLine(ConsoleColor.Gray, e.ToString());
+        if(e.StackTrace?.ToString().Contains("Pop") is not null)
+            ColorLine(ConsoleColor.Red, "Possible stack underflow (it is expensive to check). Enable 'debug' to see the full exception.");
+        if(vm.Debug) ColorLine(ConsoleColor.Gray, e.ToString());
         vm.Reset();
     } catch(Exception e)
     {
-        ColorLine(ConsoleColor.Red, e.ToString());
+        ColorLine(ConsoleColor.Red, e.ToString() + " Enable 'debug' to see the full exception.");
+        if(vm.Debug) ColorLine(ConsoleColor.Gray, e.ToString());
         vm.Reset();
     }
 
