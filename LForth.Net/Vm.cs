@@ -7,6 +7,8 @@
  **/
 
 namespace Forth;
+
+using System.Diagnostics.CodeAnalysis;
 using static Forth.Utils;
 
 /** The VM accepts several opcodes, which have a fixed byte lenght (i.e., one byte) and can be followed
@@ -16,7 +18,10 @@ using static Forth.Utils;
 
 public enum Op {
     Colo, Semi, Does, Numb, Plus, Minu, Mult, Divi, Prin,
-    Count, Word, Refill, Comma, Here, At, Store
+    Count, Word, Refill, Comma, Here, At, Store,
+    State,
+    Bl,
+    Call
 }
 
 public class Vm {
@@ -32,16 +37,23 @@ public class Vm {
     /** There are a lot of buffers in Forth that needs to be represented in data space, because
      * you can store their address on the stack. Read a Forth book to understand them.
      **/
-    Index source;
-    Index keyWord;
-    Index word;
-    Index inp;
-    Index source_max_chars;
-    Index word_max_chars;
+    readonly Index source;
+    readonly Index keyWord;
+    readonly Index word;
+    readonly Index inp;
+    readonly Index source_max_chars;
+    readonly Index word_max_chars;
+    readonly Index pad;
+    readonly Index strings;
+
     Index input_len_chars = 0;
-    Index pad;
-    Index strings;
-    Index base_p;
+
+    /** This is the base to interpret numbers. **/
+    readonly Index base_p;
+    /** State TRUE when compiling, FALSE when interpreting. **/
+    readonly Index state;
+    bool Executing { get => ReadCell (ds, state) == FALSE;
+                     set => WriteCell(ds, state, value ? FALSE : TRUE);}
 
     /** These are the parameter stack, return stack and data stack.
      *  Why not use the .NET stack class? Because we need access to the internal data structure underlying it.
@@ -59,7 +71,7 @@ public class Vm {
      **/
     Index    ip = 0;
     Index    cp = 0;
-    Code[]   cs;
+    readonly Code[]   cs;
 
     /** User defined words in Forth are pointers to code (and memory), plus metadata. They are kept in a list, which
      * makes retrieval slower, but allows multiple copies with the same name, which seems necessary at times.
@@ -67,16 +79,23 @@ public class Vm {
      * Again, ANS Forth allows this, instead of the traditional way of keeping a linked list of Words in the
      * Data Space.
      **/
-    record struct Word(string Name, Index Ip, Index Dsp, bool Immediate);
-    List<Word>  dict;
+    record struct Word(string Name, Index Ip, bool Immediate);
+
+    readonly List<Word>  dict;
+
+    /** There are some words that directly maps to single opcodes **/
+    readonly Dictionary<string, Op> WordToSimpleOp = new()
+    {
+        { "."   , Op.Prin },
+        { "bl"  , Op.Bl }
+    };
 
     /** This is implemented as a callback, instead of one of the existing .net interfaces to read text
      * so that we can inject special behavior before of after reading the line from file or console.
      **/
-    Func<string>? nextLine;
+    public Func<string>? NextLine = null;
 
     public Vm(
-        Func<string>? getLine   = null,
         Index maxParameterStack = Config.SmallStack,
         Index maxReturnStack    = Config.SmallStack,
         Index maxDataStack      = Config.SmallStack,
@@ -87,8 +106,6 @@ public class Vm {
         Index maxSource         = 1_024,
         Index maxWord           = 128
         ) {
-
-        nextLine = getLine;
 
         ps   = new AUnit[maxParameterStack];
         rs   = new AUnit[maxReturnStack];
@@ -105,7 +122,7 @@ public class Vm {
         here_p += maxWord * CHAR_SIZE;
 
         pad              = here_p;
-        here_p           += maxPad;
+        here_p          += maxPad;
         source_max_chars = maxSource;
         word_max_chars   = maxWord;
 
@@ -118,7 +135,86 @@ public class Vm {
 
         inp     = here_p;
         here_p += CELL_SIZE;
+
+        state   = here_p;
+        here_p += CELL_SIZE;
     }
+    public void Reset()
+    {
+        sp = 0; rp = 0; Executing = true;
+    }
+    public void Quit()
+    {
+        if(NextLine is null) Throw("Trying to Quit with a null readline.");
+
+        while(true)
+        {
+            Refill();
+            if(Pop() == TRUE)
+                Interpret();
+            else
+                break;
+        }
+    }
+    public IEnumerable<string> Words()
+    {
+        return dict.Select(w => w.Name).Concat(WordToSimpleOp.Keys);
+    }
+    void PushOp(Op op) => cs[cp++] = (Code)op;
+    void PushOp(Op op, Cell value)
+    {
+        var ip = cp;
+        PushOp(Op.Numb);
+        Write7BitEncodedCell(cs, cp, value, out Index howMany);
+        cp += howMany;
+    }
+
+    /** Interpreting means first compiling to the code stack, then executing the opcodes
+     * if we are in Executing status. **/
+    bool InterpretWord(string s)
+    {
+        var sl = s.ToLowerInvariant();
+        var word = dict.FindLast(w => w.Name == sl);
+
+        if(word != default)
+        {
+            PushOp(Op.Call, word.Ip);
+            if(Executing || word.Immediate) Execute();
+            return true;
+        }
+        if(WordToSimpleOp.TryGetValue(sl, out var op))
+        {
+            PushOp(op);
+            if(Executing) Execute();
+            return true;
+        }
+        return false;
+    }
+    void InterpretNumber(Cell n)
+    {
+        PushOp(Op.Numb, n);
+        if(Executing) Execute();
+    }
+    void Interpret()
+    {
+        while(true)
+        {
+            Bl();
+            WordW();
+            Count();
+            var s = ToDotNetString();
+            if(string.IsNullOrEmpty(s)) break;
+
+            if(!InterpretWord(s))
+                if(Cell.TryParse(s, out Cell n))
+                    InterpretNumber(n);
+                else
+                    Throw($"{s} is not a recognized word or number.");
+        }
+    }
+    void Bl() => Push(' ');
+    void State() => Push(state);
+
     /** This is the main dynamic dispatch point. There is a large literature on how to do this faster.
      * It seems that some form of computed goto is necessary (as gcc allows) for maximum performance.
      * This is because of branch prediction in the cpu. With a switch statement you have just one jumping
@@ -130,46 +226,50 @@ public class Vm {
      *
      * TThe expectation is to execute code from ip to the end of the code segment, represented by cp.
      **/
-    public void Execute() {
-        while(ip < cp) {
-            var op = cs[ip];
-            ip++;
-            Cell n;
-            switch((Op)op) {
-                case Op.Numb:
-                    n = Read7BitEncodedCell(cs, ip, out var count);
-                    Push(n);
-                    ip += count;
-                    break;
-                case Op.Prin:
-                    n = Pop();
-                    Console.Write($"{n} ");
-                    break;
-                case Op.Count:
-                    Count();
-                    break;
-                case Op.Refill:
-                    Refill();
-                    break;
-                case Op.Word:
-                    WordW();
-                    break;
-                case Op.Comma:
-                    Comma();
-                    break;
-                case Op.Here:
-                    Here();
-                    break;
-                case Op.At:
-                    At();
-                    break;
-                case Op.Store:
-                    Store();
-                    break;
-                default:
-                    Throw($"{((Op)op).ToString()} bytecode not supported.");
-                    break;
-            }
+    void Execute() {
+        var op = cs[ip];
+        ip++;
+        Cell n;
+        switch((Op)op) {
+            case Op.Numb:
+                n = Read7BitEncodedCell(cs, ip, out var count);
+                Push(n);
+                ip += count;
+                break;
+            case Op.Prin:
+                n = Pop();
+                Console.Write($"{n} ");
+                break;
+            case Op.Count:
+                Count();
+                break;
+            case Op.Refill:
+                Refill();
+                break;
+            case Op.Word:
+                WordW();
+                break;
+            case Op.Comma:
+                Comma();
+                break;
+            case Op.Here:
+                Here();
+                break;
+            case Op.At:
+                At();
+                break;
+            case Op.Store:
+                Store();
+                break;
+            case Op.State:
+                State();
+                break;
+            case Op.Bl:
+                Bl();
+                break;
+            default:
+                Throw($"{(Op)op} bytecode not supported.");
+                break;
         }
     }
     /** These are internal to be able to test them. What a bother. **/
@@ -192,9 +292,9 @@ public class Vm {
      **/
     internal void Refill()
     {
-        if(nextLine == null) Throw("Trying to Refill, without having passed a nextLine func");
+        if(NextLine == null) Throw("Trying to Refill, without having passed a NextLine func");
 
-        var inputBuffer = nextLine!();
+        var inputBuffer = NextLine();
 
         if (inputBuffer == null)
         {
@@ -209,7 +309,7 @@ public class Vm {
             var inputCharSpan = ToChars(source, input_len_chars);
             var bytes = new Span<byte>(Encoding.UTF8.GetBytes(inputBuffer));
             bytes.CopyTo(inputCharSpan);
-            ds[inp] = 0;
+            WriteCell(ds, inp, 0);
             Push(TRUE);
         }
     }
@@ -280,8 +380,10 @@ public class Vm {
         Push(toPtr);
     }
     Span<byte> ToChars(Index start, Index lenInBytes)
-            => new Span<AUnit>(ds, start, lenInBytes);
+            => new(ds, start, lenInBytes);
 }
+
+public class ForthException: Exception { public ForthException(string s): base(s) { } };
 
 static class Utils {
     internal static void WriteCell(AUnit[] ar, Index i, Cell c)
@@ -301,7 +403,8 @@ static class Utils {
         i -= Vm.CELL_SIZE;
         return ReadCell(a, i);
     }
-    internal static void Throw(string message) => throw new Exception(message);
+    [DoesNotReturn]
+    internal static void Throw(string message) => throw new ForthException(message);
 
     internal static long Read7BitEncodedCell(Code[] codes, Index index, out Index howMany) {
         using var stream = new MemoryStream(codes, index, 10);

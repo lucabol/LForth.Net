@@ -42,7 +42,7 @@ public class UnitTest1
     [MemberData(nameof(GetDataRefill))]
     public void RefillWorks(string s)
     {
-        var vm = new Vm(() => s);
+        var vm = new Vm { NextLine = () => s };
         vm.Refill();
         var flag = vm.Pop();
         Assert.Equal(-1, flag);
@@ -53,7 +53,7 @@ public class UnitTest1
     [MemberData(nameof(GetDataWord))]
     public void WordWorks(string s, string[] words)
     {
-        var vm = new Vm(() => s);
+        var vm = new Vm { NextLine = () => s };
         vm.Refill();
         var flag = vm.Pop();
         Assert.Equal(-1, flag);

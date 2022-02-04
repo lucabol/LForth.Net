@@ -20,6 +20,6 @@ global using GitVarInt;
 namespace Forth;
 
 public static class Config {
-    const Index K = 1_024;
+    const Index K                 = 1_024;
     public const Index SmallStack = 64 * K;
 }
