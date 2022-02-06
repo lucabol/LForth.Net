@@ -18,11 +18,8 @@ using static Forth.Utils;
 
 public enum Op {
     Colo, Semi, Does, Numb, Plus, Minu, Mult, Divi, Prin,
-    Count, Word, Refill, Comma, Here, At, Store,
-    State,
-    Bl,
-    Call,
-    Dup
+    Count, Word, Refill, Comma, Here, At, Store, State, Bl, Call, Dup, Nest, UnNest,
+    Swap, Dup2, Drop, Drop2, Find
 }
 
 public class Vm {
@@ -61,9 +58,9 @@ public class Vm {
     /** These are the parameter stack, return stack and data stack.
      *  Why not use the .NET stack class? Because we need access to the internal data structure underlying it.
      **/
-    Index sp  = 0;
+    internal Index sp  = 0;
     Index rp  = 0;
-    Index here_p  = 0;
+    Index herep  = 0;
     AUnit[] ps;
     AUnit[] rs;
     AUnit[] ds;
@@ -78,13 +75,8 @@ public class Vm {
 
     /** User defined words in Forth are pointers to code (and memory), plus metadata. They are kept in a list, which
      * makes retrieval slower, but allows multiple copies with the same name, which seems necessary at times.
-     * Perhaps an hashtable woould work as well, and be faster, but staying safe for now.
-     * Again, ANS Forth allows this, instead of the traditional way of keeping a linked list of Words in the
-     * Data Space.
      **/
-    record struct Word(string Name, Index Ip, bool Immediate);
-
-    readonly List<Word>  dict;
+    Index dictHead;
 
     /** There are some words that directly maps to single opcodes **/
     readonly Dictionary<string, Op> WordToSimpleOp = new()
@@ -98,7 +90,9 @@ public class Vm {
         { "@"           , Op.At },
         { "!"           , Op.Store },
         { "state"       , Op.State },
-        { "bl"          , Op.Bl }
+        { "bl"          , Op.Bl },
+        { ":"           , Op.Colo },
+        { ";"           , Op.Semi },
     };
 
     /** While other words need to perfom more complicated actions at compile time **/
@@ -125,38 +119,37 @@ public class Vm {
         rs   = new AUnit[maxReturnStack];
         ds   = new AUnit[maxDataStack];
         cs   = new Code[maxCodeStack];
-        dict = new (maxDictionary);
 
-        keyWord = here_p;
-        here_p += maxWord * CHAR_SIZE;
-        source  = here_p;
-        here_p += maxSource * CHAR_SIZE;
+        keyWord = herep;
+        herep += maxWord * CHAR_SIZE;
+        source  = herep;
+        herep += maxSource * CHAR_SIZE;
 
-        word    = here_p;
-        here_p += maxWord * CHAR_SIZE;
+        word    = herep;
+        herep += maxWord * CHAR_SIZE;
 
-        pad              = here_p;
-        here_p          += maxPad;
+        pad              = herep;
+        herep          += maxPad;
         source_max_chars = maxSource;
         word_max_chars   = maxWord;
 
-        base_p     = here_p;
-        here_p    += CELL_SIZE;
+        base_p     = herep;
+        herep    += CELL_SIZE;
         ds[base_p] = 10;
 
-        strings = here_p;
-        here_p += maxStrings * Vm.CHAR_SIZE;
+        strings = herep;
+        herep += maxStrings * Vm.CHAR_SIZE;
 
-        inp     = here_p;
-        here_p += CELL_SIZE;
+        inp     = herep;
+        herep += CELL_SIZE;
 
-        state   = here_p;
-        here_p += CELL_SIZE;
+        state   = herep;
+        herep += CELL_SIZE;
 
         WordToDef = new()
         {
             { "debug", () => Debug = !Debug },
-            { "bye", () => Environment.Exit(0) }
+            { "bye", () => Environment.Exit(0) },
         };
     }
     public void Reset()
@@ -178,7 +171,7 @@ public class Vm {
     }
     public IEnumerable<string> Words()
     {
-        return dict.Select(w => w.Name).Concat(WordToSimpleOp.Keys);
+        return WordToSimpleOp.Keys.Concat(WordToDef.Keys);
     }
     void PushOp(Op op) => cs[cp++] = (Code)op;
     void PushOp(Op op, Cell value)
@@ -189,17 +182,78 @@ public class Vm {
         cp += howMany;
     }
 
+    static Index LinkToCode(Index link, Index wordLen)
+        // Addr + Link size + len size  + word chars
+        => link + CELL_SIZE + CHAR_SIZE + CHAR_SIZE * wordLen;
+
+    internal void Find()
+    {
+        var caddr = (Index)Pop();
+        var clen  = ds[caddr];
+        var cspan = new Span<AChar>(ds, caddr + 1 * CHAR_SIZE, clen);
+
+        var dp = dictHead;
+        while(true)
+        {
+            if(dp == 0) break;
+
+            var wordNameStart = dp + CELL_SIZE;
+            var wordLenRaw    = ds[wordNameStart];
+            var wordLen       = Utils.ResetHighBit(wordLenRaw);
+            var wordSpan      = new Span<AChar>(ds, wordNameStart + 1 * CHAR_SIZE, wordLen);
+            var res           = cspan.SequenceEqual(wordSpan);
+            if(res) // Found
+            {
+                Push(LinkToCode(dp, wordLen));                
+                Push(Utils.HighBitValue(wordLenRaw) == 1 ? 1 : -1);
+                return;
+            }
+            dp = (Index)ReadCell(ds, dp);
+        }
+        // Not found
+        Push(caddr);
+        Push(0);
+    }
+    /** Add Word to the dictionary. Assumes we are always adding at here.
+    * The shape of the dictionary is |Link|Name Lenght Cell|Name chars|Code|
+    * The Lenght cell has the higher bit set if an immediate word.
+    **/
+    internal void DictAdd()
+    {
+        // First put the link
+        Push(dictHead);             // Push last index
+        dictHead = herep;           // DH is now here
+        Comma();                    // Store last index in new dictHead (here)
+
+        // Copy word to here
+        var len = ds[(Index)Peek()];
+        Push(herep);
+        Push(len);
+        CMove();
+        herep += len + 1;
+
+    }
+    void CMove()
+    {
+        var u  = Pop();
+        var a2 = Pop();
+        var a1 = Pop();
+        Array.Copy(ds, a1, ds, a2, u + 1);
+    }
     /** Interpreting means first compiling to the code stack, then executing the opcodes
      * if we are in Executing status. **/
     bool InterpretWord(string s)
     {
         var sl = s.ToLowerInvariant();
-        var word = dict.FindLast(w => w.Name == sl);
+        Find();
+        var res   = Pop();
+        var xt    = Pop();
 
-        if(word != default)
+        if(res != 0)
         {
-            PushOp(Op.Call, word.Ip);
-            if(Executing || word.Immediate) Execute();
+            PushOp(Op.Call, xt);
+            var immediate = res == 1;
+            if(Executing || immediate) Execute();
             return true;
         }
         if(WordToSimpleOp.TryGetValue(sl, out var op))
@@ -237,7 +291,16 @@ public class Vm {
                     Throw($"{s} is not a recognized word or number.");
         }
     }
-    void Bl() => Push(' ');
+    internal string DotS()
+    {
+        StringBuilder sb = new();
+        for (int i = 0; i < sp; i += CELL_SIZE)
+        {
+            sb.Append(ReadCell(ps, i)); sb.Append(' ');
+        }
+        return sb.ToString();
+    }
+    internal void Bl()    => Push(' ');
     void State() => Push(state);
 
     /** This is the main dynamic dispatch point. There is a large literature on how to do this faster.
@@ -255,6 +318,7 @@ public class Vm {
         var op = cs[ip];
         ip++;
         Cell n;
+        string s;
         switch((Op)op) {
             case Op.Numb:
                 n = Read7BitEncodedCell(cs, ip, out var count);
@@ -295,6 +359,33 @@ public class Vm {
             case Op.Dup:
                 Dup();
                 break;
+            case Op.Swap:
+                Swap();
+                break;
+            case Op.Dup2:
+                Dup2();
+                break;
+            case Op.Drop:
+                Drop();
+                break;
+            case Op.Drop2:
+                Drop2();
+                break;
+            case Op.Find:
+                Find();
+                break;
+            case Op.Colo:
+                s = NextWord();
+                if(string.IsNullOrWhiteSpace(s)) Throw("Colon needs a subsequent word in the stream.");
+                //dict.Add(new Word { Name = s, Ip = ip, Immediate = false});
+                Executing = false;
+                PushOp(Op.Nest);
+                // put vm in compilation mode
+                // emit Nest
+                break;
+            case Op.Semi:
+                // Emit UnNest
+                break;
             default:
                 Throw($"{(Op)op} bytecode not supported.");
                 break;
@@ -308,10 +399,14 @@ public class Vm {
     internal void RPush(Cell n) => rs = Utils.Add(rs, ref rp, n);
     internal Cell RPop()        => Utils.ReadBeforeIndex(rs, ref rp);
 
-    internal void Comma()       => ds = Utils.Add(ds, ref here_p, Pop());
+    internal void DPush(Cell n) => ds = Utils.Add(ds, ref herep, n);
+
+    internal void Comma()       => ds = Utils.Add(ds, ref herep, Pop());
     internal void Store()       => Utils.WriteCell(ds, (Index)Pop(), Pop());
     internal void At()          => Push(Utils.ReadCell(ds, (Index)Pop()));
-    internal void Here()        => Push(here_p);
+    internal void Here()        => Push(herep);
+    internal void Depth()       => Push(sp / CELL_SIZE);
+    internal void Swap() { var a = Pop(); var b = Pop(); Push(a); Push(b); }
 
     /** Refill fills out the input buffer at source, translating from UTF16 (.net) to UTF8 (what I want).
      * It would be nice to have a separate segment for strings, but Forth requires them to be store in the
@@ -347,7 +442,30 @@ public class Vm {
         Push(input_len_chars);
     }
 
-    void Dup() => Push(ps[sp++]);
+    internal void Compare()
+    {
+        var u2 = (Index)Pop();
+        var a2 = (Index)Pop();
+        var u1 = (Index)Pop();
+        var a1 = (Index)Pop();
+
+        var s1 = new Span<AChar>(ds, a1, u1);
+        var s2 = new Span<AChar>(ds, a2, u2);
+        var r  = MemoryExtensions.SequenceCompareTo(s1, s2);
+        Push(r < 0 ? -1 : r > 0 ? +1 : 0);
+    }
+    internal void Drop()  => sp -= CELL_SIZE;
+    internal void Drop2() => sp -= CELL_SIZE * 2; 
+    internal void Dup()   => Push(Peek());
+    internal void Dup2()
+    {
+        var x2 = Pop();
+        var x1 = Pop();
+        Push(x1);
+        Push(x2);
+        Push(x1);
+        Push(x2);
+    }
 
     /** It is implemented like this to avoid endianess problems **/
     void CFetch()
@@ -379,7 +497,7 @@ public class Vm {
 
         var w = ToChars(toPtr, word_max_chars);
 
-        var j = 1; // It is a counted string, the first byte contains the length
+        var j = 1; // It is a counted string, the first 4 bytes contains the length
 
         ref var index = ref ds[this.inp];
 
@@ -407,6 +525,13 @@ public class Vm {
         w[0] = (byte)(j - 1);  // len goes into the first char
         Push(toPtr);
     }
+    string NextWord(Code c = (byte)' ')
+    {
+        Push(c);
+        WordW();
+        Count();
+        return ToDotNetString();
+    }
     Span<byte> ToChars(Index start, Index lenInBytes)
             => new(ds, start, lenInBytes);
 }
@@ -414,11 +539,27 @@ public class Vm {
 public class ForthException: Exception { public ForthException(string s): base(s) { } };
 
 static class Utils {
+
+    const AChar HighBit     = 0b10000000; 
+    const AChar HighBitMask = 0b01111111;
+
+    internal static bool  IsHighBitSet(AChar c) => (HighBit & c) != 0;
+    internal static AChar ResetHighBit(AChar c) => (AChar)(HighBitMask & c);
+    internal static AChar HighBitValue(AChar c) => (AChar) (c >> 7);
+
     internal static void WriteCell(AUnit[] ar, Index i, Cell c)
-        => MemoryMarshal.Write(new Span<byte>(ar, i, Vm.CELL_SIZE), ref c);
+#if CELL32
+        => BinaryPrimitives.WriteInt32LittleEndian(new Span<byte>(ar, i, Vm.CELL_SIZE), c);
+#else
+        => BinaryPrimitives.WriteInt64LittleEndian(new Span<byte>(ar, i, Vm.CELL_SIZE), c);
+#endif
 
     internal static Cell ReadCell(AUnit[] ar, Index i)
-        => MemoryMarshal.Read<Cell>(new Span<byte>(ar, i, Vm.CELL_SIZE));
+#if CELL32
+        => BinaryPrimitives.ReadInt32LittleEndian(new Span<byte>(ar, i, Vm.CELL_SIZE));
+#else
+        => BinaryPrimitives.ReadInt64LittleEndian(new Span<byte>(ar, i, Vm.CELL_SIZE));
+#endif
 
     internal static AUnit[] Add(AUnit[] a, ref Index i, Cell t) {
         if(i + Vm.CELL_SIZE >= a.Length) Array.Resize(ref a, i * 2);
