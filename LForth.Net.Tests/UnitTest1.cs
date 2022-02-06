@@ -88,9 +88,8 @@ public class UnitTest1
         {
             vm.Push(' ');
             vm.WordW();
-            vm.Count();
-            if(vm.Peek() == 0) { vm.Drop(); vm.Drop(); break;};
-            Assert.Equal(words[i], vm.ToDotNetString());
+            if(vm.IsEmptyWordC()) { vm.Drop(); break;};
+            Assert.Equal(words[i], vm.ToDotNetStringC());
             i++;
         }
 

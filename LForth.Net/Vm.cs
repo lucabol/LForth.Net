@@ -18,8 +18,9 @@ using static Forth.Utils;
 
 public enum Op {
     Colo, Semi, Does, Numb, Plus, Minu, Mult, Divi, Prin,
-    Count, Word, Refill, Comma, Here, At, Store, State, Bl, Call, Dup, Nest, UnNest,
-    Swap, Dup2, Drop, Drop2, Find
+    Count, Word, Refill, Comma, Here, At, Store, State, Bl, Call, Dup, Nest, Exit,
+    Swap, Dup2, Drop, Drop2, Find,
+    Bye
 }
 
 public class Vm {
@@ -58,7 +59,7 @@ public class Vm {
     /** These are the parameter stack, return stack and data stack.
      *  Why not use the .NET stack class? Because we need access to the internal data structure underlying it.
      **/
-    internal Index sp  = 0;
+    Index sp  = 0;
     Index rp  = 0;
     Index herep  = 0;
     AUnit[] ps;
@@ -92,7 +93,7 @@ public class Vm {
         { "state"       , Op.State },
         { "bl"          , Op.Bl },
         { ":"           , Op.Colo },
-        { ";"           , Op.Semi },
+        { "bye"         , Op.Bye },
     };
 
     /** While other words need to perfom more complicated actions at compile time **/
@@ -148,8 +149,8 @@ public class Vm {
 
         WordToDef = new()
         {
-            { "debug", () => Debug = !Debug },
-            { "bye", () => Environment.Exit(0) },
+            { "debug",  () => Debug = !Debug },
+            { ";",      () => { Executing = true; PushOp(Op.Exit);} },
         };
     }
     public void Reset()
@@ -242,9 +243,12 @@ public class Vm {
     }
     /** Interpreting means first compiling to the code stack, then executing the opcodes
      * if we are in Executing status. **/
-    bool InterpretWord(string s)
+    bool InterpretWord()
     {
-        var sl = s.ToLowerInvariant();
+        // TODO: optimize away string creation, requires not storing word to opcode/definition data in hashtables (I think).
+        Dup();
+        var sl = ToDotNetStringC();
+
         Find();
         var res   = Pop();
         var xt    = Pop();
@@ -274,21 +278,25 @@ public class Vm {
         PushOp(Op.Numb, n);
         if(Executing) Execute();
     }
+    internal bool IsEmptyWordC() => ds[Peek()] == 0;
+
     void Interpret()
     {
         while(true)
         {
             Bl();
             WordW();
-            Count();
-            var s = ToDotNetString();
-            if(string.IsNullOrEmpty(s)) break;
+            if(IsEmptyWordC()) { Drop(); break;};
 
-            if(!InterpretWord(s))
+            // TODO: remove string allocation from main loop.
+            Dup();
+            var s = ToDotNetStringC();
+            if(!InterpretWord()) {
                 if(Cell.TryParse(s, out Cell n))
                     InterpretNumber(n);
                 else
                     Throw($"{s} is not a recognized word or number.");
+            }
         }
     }
     internal string DotS()
@@ -318,10 +326,10 @@ public class Vm {
         var op = cs[ip];
         ip++;
         Cell n;
-        string s;
+        Index count;
         switch((Op)op) {
             case Op.Numb:
-                n = Read7BitEncodedCell(cs, ip, out var count);
+                n = Read7BitEncodedCell(cs, ip, out count);
                 Push(n);
                 ip += count;
                 break;
@@ -374,17 +382,24 @@ public class Vm {
             case Op.Find:
                 Find();
                 break;
-            case Op.Colo:
-                s = NextWord();
-                if(string.IsNullOrWhiteSpace(s)) Throw("Colon needs a subsequent word in the stream.");
-                //dict.Add(new Word { Name = s, Ip = ip, Immediate = false});
-                Executing = false;
-                PushOp(Op.Nest);
-                // put vm in compilation mode
-                // emit Nest
+            case Op.Bye:
+                Environment.Exit(0);
                 break;
-            case Op.Semi:
-                // Emit UnNest
+            case Op.Colo:
+                Push(' ');
+                WordW();
+                if(ds[Peek()] == 0) Throw("Colon needs a subsequent word in the stream.");
+                DictAdd();
+                Executing = false;
+                break;
+            case Op.Call:
+                n = Read7BitEncodedCell(cs, ip, out count);
+                ip += count;
+                RPush(ip);
+                ip = (Index)n;
+                break;
+            case Op.Exit:
+                ip = (Index)RPop();
                 break;
             default:
                 Throw($"{(Op)op} bytecode not supported.");
@@ -406,7 +421,7 @@ public class Vm {
     internal void At()          => Push(Utils.ReadCell(ds, (Index)Pop()));
     internal void Here()        => Push(herep);
     internal void Depth()       => Push(sp / CELL_SIZE);
-    internal void Swap() { var a = Pop(); var b = Pop(); Push(a); Push(b); }
+    internal void Swap()        { var a = Pop(); var b = Pop(); Push(a); Push(b); }
 
     /** Refill fills out the input buffer at source, translating from UTF16 (.net) to UTF8 (what I want).
      * It would be nice to have a separate segment for strings, but Forth requires them to be store in the
@@ -481,6 +496,12 @@ public class Vm {
         Push(start + 1);
         Push(ds[start]);
     }
+    internal string ToDotNetStringC()
+    {
+        var a = (Index)Pop();
+        var s = new Span<AChar>(ds, a + CHAR_SIZE, ds[a]);
+        return Encoding.UTF8.GetString(s);
+    }
     internal string ToDotNetString()
     {
         var c = (Index)Pop();
@@ -524,13 +545,6 @@ public class Vm {
 
         w[0] = (byte)(j - 1);  // len goes into the first char
         Push(toPtr);
-    }
-    string NextWord(Code c = (byte)' ')
-    {
-        Push(c);
-        WordW();
-        Count();
-        return ToDotNetString();
     }
     Span<byte> ToChars(Index start, Index lenInBytes)
             => new(ds, start, lenInBytes);
