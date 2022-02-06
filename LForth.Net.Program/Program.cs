@@ -4,6 +4,9 @@ using static System.Console;
 Vm vm = new();
 vm.NextLine = NextLine;
 
+WriteLine("Say 'bye' to exit. No output means all good.");
+System.ReadLine.HistoryEnabled = true;
+
 while(true)
     try
     {
@@ -18,7 +21,7 @@ while(true)
         vm.Reset();
     } catch(Exception e)
     {
-        ColorLine(ConsoleColor.Red, e.ToString() + " Enable 'debug' to see the full exception.");
+        ColorLine(ConsoleColor.Red, e.Message + " Enable 'debug' to see the full exception.");
         if(vm.Debug) ColorLine(ConsoleColor.Gray, e.ToString());
         vm.Reset();
     }

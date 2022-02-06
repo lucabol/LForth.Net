@@ -19,8 +19,7 @@ using static Forth.Utils;
 public enum Op {
     Colo, Semi, Does, Numb, Plus, Minu, Mult, Divi, Prin,
     Count, Word, Refill, Comma, Here, At, Store, State, Bl, Call, Dup, Nest, Exit,
-    Swap, Dup2, Drop, Drop2, Find,
-    Bye
+    Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit
 }
 
 public class Vm {
@@ -62,6 +61,7 @@ public class Vm {
     Index sp  = 0;
     Index rp  = 0;
     Index herep  = 0;
+    Index ip  = 0;
     AUnit[] ps;
     AUnit[] rs;
     AUnit[] ds;
@@ -70,8 +70,6 @@ public class Vm {
      * because instruction opcodes are smaller than cells.They can be indexed more easily if kept separate.
      * I believe ANS Forth allows this. IP is the instruction pointer, while cp is the top of the stack.
      **/
-    Index    ip = 0;
-    Index    cp = 0;
     readonly Code[]   cs;
 
     /** User defined words in Forth are pointers to code (and memory), plus metadata. They are kept in a list, which
@@ -85,6 +83,8 @@ public class Vm {
         { "."           , Op.Prin },
         { "count"       , Op.Count },
         { "refill"      , Op.Refill },
+        { "interpret"   , Op.Interpret },
+        { "quit"        , Op.Quit },
         { "word"        , Op.Word },
         { ","           , Op.Comma },
         { "here"        , Op.Here },
@@ -94,6 +94,11 @@ public class Vm {
         { "bl"          , Op.Bl },
         { ":"           , Op.Colo },
         { "bye"         , Op.Bye },
+        { ".s"          , Op.DotS },
+        { "+"           , Op.Plus },
+        { "-"           , Op.Minu },
+        { "*"           , Op.Mult },
+        { "/"           , Op.Divi },
     };
 
     /** While other words need to perfom more complicated actions at compile time **/
@@ -108,7 +113,6 @@ public class Vm {
         Index maxParameterStack = Config.SmallStack,
         Index maxReturnStack    = Config.SmallStack,
         Index maxDataStack      = Config.SmallStack,
-        Index maxDictionary     = Config.SmallStack,
         Index maxCodeStack      = Config.SmallStack,
         Index maxStrings        = 128,
         Index maxPad            = 1_024,
@@ -119,7 +123,7 @@ public class Vm {
         ps   = new AUnit[maxParameterStack];
         rs   = new AUnit[maxReturnStack];
         ds   = new AUnit[maxDataStack];
-        cs   = new Code[maxCodeStack];
+        cs   = ds;
 
         keyWord = herep;
         herep += maxWord * CHAR_SIZE;
@@ -130,7 +134,7 @@ public class Vm {
         herep += maxWord * CHAR_SIZE;
 
         pad              = herep;
-        herep          += maxPad;
+        herep           += maxPad;
         source_max_chars = maxSource;
         word_max_chars   = maxWord;
 
@@ -155,10 +159,12 @@ public class Vm {
     }
     public void Reset()
     {
-        sp = 0; rp = 0; Executing = true;
+        sp = 0; rp = 0; Executing = true; ds[inp] = 0;
     }
     public void Quit()
     {
+        rp = 0; Executing = true; ds[inp] = 0; // Don't reset the parameter stack as for ANS FORTH definition of QUIT.
+
         if(NextLine is null) Throw("Trying to Quit with a null readline.");
 
         while(true)
@@ -174,13 +180,12 @@ public class Vm {
     {
         return WordToSimpleOp.Keys.Concat(WordToDef.Keys);
     }
-    void PushOp(Op op) => cs[cp++] = (Code)op;
+    void PushOp(Op op) {cs[herep] = (Code)op; ip = herep; herep++;}
     void PushOp(Op op, Cell value)
     {
-        ip = cp;
         PushOp(op);
-        Write7BitEncodedCell(cs, cp, value, out Index howMany);
-        cp += howMany;
+        Write7BitEncodedCell(cs, herep, value, out Index howMany);
+        herep += howMany;
     }
 
     static Index LinkToCode(Index link, Index wordLen)
@@ -273,9 +278,9 @@ public class Vm {
         }
         return false;
     }
-    void InterpretNumber(Cell n)
+    void InterpretNumber(Cell value)
     {
-        PushOp(Op.Numb, n);
+        PushOp(Op.Numb, value);
         if(Executing) Execute();
     }
     internal bool IsEmptyWordC() => ds[Peek()] == 0;
@@ -302,6 +307,7 @@ public class Vm {
     internal string DotS()
     {
         StringBuilder sb = new();
+        sb.Append($"<{sp / CELL_SIZE}> ");
         for (int i = 0; i < sp; i += CELL_SIZE)
         {
             sb.Append(ReadCell(ps, i)); sb.Append(' ');
@@ -323,87 +329,114 @@ public class Vm {
      * TThe expectation is to execute code from ip to the end of the code segment, represented by cp.
      **/
     void Execute() {
-        var op = cs[ip];
-        ip++;
-        Cell n;
-        Index count;
-        switch((Op)op) {
-            case Op.Numb:
-                n = Read7BitEncodedCell(cs, ip, out count);
-                Push(n);
-                ip += count;
-                break;
-            case Op.Prin:
-                n = Pop();
-                Console.Write($"{n} ");
-                break;
-            case Op.Count:
-                Count();
-                break;
-            case Op.Refill:
-                Refill();
-                break;
-            case Op.Word:
-                WordW();
-                break;
-            case Op.Comma:
-                Comma();
-                break;
-            case Op.Here:
-                Here();
-                break;
-            case Op.At:
-                At();
-                break;
-            case Op.Store:
-                Store();
-                break;
-            case Op.State:
-                State();
-                break;
-            case Op.Bl:
-                Bl();
-                break;
-            case Op.Dup:
-                Dup();
-                break;
-            case Op.Swap:
-                Swap();
-                break;
-            case Op.Dup2:
-                Dup2();
-                break;
-            case Op.Drop:
-                Drop();
-                break;
-            case Op.Drop2:
-                Drop2();
-                break;
-            case Op.Find:
-                Find();
-                break;
-            case Op.Bye:
-                Environment.Exit(0);
-                break;
-            case Op.Colo:
-                Push(' ');
-                WordW();
-                if(ds[Peek()] == 0) Throw("Colon needs a subsequent word in the stream.");
-                DictAdd();
-                Executing = false;
-                break;
-            case Op.Call:
-                n = Read7BitEncodedCell(cs, ip, out count);
-                ip += count;
-                RPush(ip);
-                ip = (Index)n;
-                break;
-            case Op.Exit:
-                ip = (Index)RPop();
-                break;
-            default:
-                Throw($"{(Op)op} bytecode not supported.");
-                break;
+
+        while(ip < herep) {
+            var op = cs[ip];
+            ip++;
+            Cell n;
+            Index count;
+            switch((Op)op) {
+                case Op.Numb:
+                    n = Read7BitEncodedCell(cs, ip, out count);
+                    Push(n);
+                    ip += count;
+                    break;
+                case Op.Prin:
+                    n = Pop();
+                    Console.Write($"{n} ");
+                    break;
+                case Op.Count:
+                    Count();
+                    break;
+                case Op.Refill:
+                    Refill();
+                    break;
+                case Op.Word:
+                    WordW();
+                    break;
+                case Op.Comma:
+                    Comma();
+                    break;
+                case Op.Here:
+                    Here();
+                    break;
+                case Op.At:
+                    At();
+                    break;
+                case Op.Store:
+                    Store();
+                    break;
+                case Op.State:
+                    State();
+                    break;
+                case Op.Bl:
+                    Bl();
+                    break;
+                case Op.Dup:
+                    Dup();
+                    break;
+                case Op.Swap:
+                    Swap();
+                    break;
+                case Op.Dup2:
+                    Dup2();
+                    break;
+                case Op.Drop:
+                    Drop();
+                    break;
+                case Op.Drop2:
+                    Drop2();
+                    break;
+                case Op.Find:
+                    Find();
+                    break;
+                case Op.Bye:
+                    Environment.Exit(0);
+                    break;
+                case Op.DotS:
+                    Console.WriteLine(DotS());
+                    break;
+                case Op.Quit:
+                    Quit();
+                    break;
+                case Op.Interpret:
+                    Interpret();
+                    break;
+                case Op.Plus:
+                    Push(Pop() + Pop());
+                    break;
+                case Op.Minu:
+                    Push(- Pop() + Pop());
+                    break;
+                case Op.Mult:
+                    Push(Pop() * Pop());
+                    break;
+                case Op.Divi:
+                    var d = Pop();
+                    var u = Pop();
+                    Push(u / d);
+                    break;
+                case Op.Colo:
+                    Push(' ');
+                    WordW();
+                    if(ds[Peek()] == 0) Throw("Colon needs a subsequent word in the stream.");
+                    DictAdd();
+                    ip = herep;
+                    Executing = false;
+                    break;
+                case Op.Call:
+                    n = Read7BitEncodedCell(cs, ip, out count);
+                    ip += count;
+                    RPush(ip);
+                    ip = (Index)n;
+                    break;
+                case Op.Exit:
+                    ip = (Index)RPop();
+                    break;
+                default:
+                    Throw($"{(Op)op} bytecode not supported.");
+                    break;
+            }
         }
     }
     /** These are internal to be able to test them. What a bother. **/
