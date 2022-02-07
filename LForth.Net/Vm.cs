@@ -19,7 +19,8 @@ using static Forth.Utils;
 public enum Op {
     Colo, Semi, Does, Numb, Plus, Minu, Mult, Divi, Prin,
     Count, Word, Refill, Comma, Here, At, Store, State, Bl, Call, Dup, Nest, Exit,
-    Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit
+    Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit,
+    ToSemi
 }
 
 public class Vm {
@@ -189,8 +190,8 @@ public class Vm {
     }
 
     static Index LinkToCode(Index link, Index wordLen)
-        // Addr + Link size + len size  + word chars
-        => link + CELL_SIZE + CHAR_SIZE + CHAR_SIZE * wordLen;
+        // Addr + Link size + len size  + word chars          + SkipSemiOp 
+        => link + CELL_SIZE + CHAR_SIZE + CHAR_SIZE * wordLen + CHAR_SIZE;
 
     internal void Find()
     {
@@ -421,6 +422,7 @@ public class Vm {
                     WordW();
                     if(ds[Peek()] == 0) Throw("Colon needs a subsequent word in the stream.");
                     DictAdd();
+                    PushOp(Op.ToSemi);
                     ip = herep;
                     Executing = false;
                     break;
