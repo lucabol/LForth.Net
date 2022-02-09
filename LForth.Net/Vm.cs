@@ -1,26 +1,18 @@
-/** # Forth.Net
- * Forth is a mind expanding language. This is a VM that represents the state of a Forth program at a particular
- * point in time. In typical Forth fashion, it knows both how to translate Forth words to bytecode instruction and
- * how to execute such instructions to move forward the state, including creating new user defined instruction.
- *
- * If you are confused, you are welcome
- **/
-
 namespace Forth;
 
 using System.Diagnostics.CodeAnalysis;
 using static Forth.Utils;
 
-/** The VM accepts several opcodes, which have a fixed byte lenght (i.e., one byte) and can be followed
- * by parameters of variable lenght. The bytecode executor is in charge of moving the instruction pointer (IP)
- * forward the correct number of bytes depending on the instruction.
- **/
 
 public enum Op {
-    Colo, Semi, Does, Numb, Plus, Minu, Mult, Divi, Prin,
-    Count, Word, Refill, Comma, Here, At, Store, State, Bl, Call, Dup, Nest, Exit,
-    Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit,
-    ToSemi
+    Error , Colo, Semi, Does, Plus, Minu, Mult, Divi, Prin,
+    Count, Word, Refill, Comma, Here, At, Store, State, Bl, Dup, Exit,
+    Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit, Create,
+    Jmp , Numb, Call,
+    NumbEx, 
+    FirstTakeVarNumb = Jmp, FirstTakeCell = NumbEx,
+    RDepth = 34,
+    Depth = 35
 }
 
 public class Vm {
@@ -35,9 +27,6 @@ public class Vm {
     internal const Index CHAR_SIZE = 1;
     internal const Index CELL_SIZE = sizeof(Cell);
 
-    /** There are a lot of buffers in Forth that needs to be represented in data space, because
-     * you can store their address on the stack. Read a Forth book to understand them.
-     **/
     readonly Index source;
     readonly Index keyWord;
     readonly Index word;
@@ -56,26 +45,15 @@ public class Vm {
     bool Executing { get => ReadCell (ds, state) == FALSE;
                      set => WriteCell(ds, state, value ? FALSE : TRUE);}
 
-    /** These are the parameter stack, return stack and data stack.
-     *  Why not use the .NET stack class? Because we need access to the internal data structure underlying it.
-     **/
-    Index sp  = 0;
-    Index rp  = 0;
+    Index sp     = 0;
+    Index rp     = 0;
     Index herep  = 0;
-    Index ip  = 0;
     AUnit[] ps;
     AUnit[] rs;
     AUnit[] ds;
 
-    /** The code stack is separate from the data stack, differently than in classic Forth. This is mainly
-     * because instruction opcodes are smaller than cells.They can be indexed more easily if kept separate.
-     * I believe ANS Forth allows this. IP is the instruction pointer, while cp is the top of the stack.
-     **/
-    readonly Code[]   cs;
+    readonly Index code = 0;
 
-    /** User defined words in Forth are pointers to code (and memory), plus metadata. They are kept in a list, which
-     * makes retrieval slower, but allows multiple copies with the same name, which seems necessary at times.
-     **/
     Index dictHead;
 
     /** There are some words that directly maps to single opcodes **/
@@ -100,21 +78,21 @@ public class Vm {
         { "-"           , Op.Minu },
         { "*"           , Op.Mult },
         { "/"           , Op.Divi },
+        { "create"      , Op.Create },
+        { "does>"       , Op.Does },
+        { "rdepth"      , Op.RDepth },
+        { "depth"       , Op.Depth },
     };
 
     /** While other words need to perfom more complicated actions at compile time **/
     readonly Dictionary<string, Action> WordToDef = new();
 
-    /** This is implemented as a callback, instead of one of the existing .net interfaces to read text
-     * so that we can inject special behavior before of after reading the line from file or console.
-     **/
     public Func<string>? NextLine = null;
 
     public Vm(
         Index maxParameterStack = Config.SmallStack,
         Index maxReturnStack    = Config.SmallStack,
         Index maxDataStack      = Config.SmallStack,
-        Index maxCodeStack      = Config.SmallStack,
         Index maxStrings        = 128,
         Index maxPad            = 1_024,
         Index maxSource         = 1_024,
@@ -124,7 +102,9 @@ public class Vm {
         ps   = new AUnit[maxParameterStack];
         rs   = new AUnit[maxReturnStack];
         ds   = new AUnit[maxDataStack];
-        cs   = ds;
+
+        code = herep;
+        herep += CHAR_SIZE + CELL_SIZE;
 
         keyWord = herep;
         herep += maxWord * CHAR_SIZE;
@@ -155,7 +135,7 @@ public class Vm {
         WordToDef = new()
         {
             { "debug",  () => Debug = !Debug },
-            { ";",      () => { Executing = true; PushOp(Op.Exit);} },
+            { ";",      () => { PushOp(Op.Exit);  Executing = true; } },
         };
     }
     public void Reset()
@@ -181,17 +161,46 @@ public class Vm {
     {
         return WordToSimpleOp.Keys.Concat(WordToDef.Keys);
     }
-    void PushOp(Op op) {cs[herep] = (Code)op; ip = herep; herep++;}
-    void PushOp(Op op, Cell value)
+    void PushOp(Op op) {
+        ds[herep] = (Code)op;
+        herep++;
+    }
+    Index PushOp(Op op, Cell value)
     {
         PushOp(op);
-        Write7BitEncodedCell(cs, herep, value, out Index howMany);
+        Write7BitEncodedCell(ds, herep, value, out var howMany);
         herep += howMany;
+        return howMany;
+    }
+    Index PushExecOp(Op op, Cell? value)
+    {
+        ds[code] = (Code)op;
+        var howMany = 0;
+        if(value is not null) Write7BitEncodedCell(ds, code + 1, (Cell)value, out howMany);
+        return howMany + 1;
+    }
+    void PushUntilExit(ref Index ip)
+    {
+        while(true)
+        {
+            var op = ds[ip];
+            var count = 0;
+            if(Utils.TakeCell(op))
+                count = CELL_SIZE;
+            else if(Utils.TakeVarNumber(op))
+                Read7BitEncodedCell(ds, ip + 1, out count);
+
+            Array.Copy(ds, ip, ds, herep, 1 + count);
+            ip += 1 + count;
+            herep += 1 + count;
+            if((Op)op == Op.Exit)
+                break;
+        }
     }
 
     static Index LinkToCode(Index link, Index wordLen)
-        // Addr + Link size + len size  + word chars          + SkipSemiOp 
-        => link + CELL_SIZE + CHAR_SIZE + CHAR_SIZE * wordLen + CHAR_SIZE;
+        // Addr + Link size + len size  + word chars
+        => link + CELL_SIZE + CHAR_SIZE + CHAR_SIZE * wordLen;
 
     internal void Find()
     {
@@ -221,10 +230,8 @@ public class Vm {
         Push(caddr);
         Push(0);
     }
-    /** Add Word to the dictionary. Assumes we are always adding at here.
-    * The shape of the dictionary is |Link|Name Lenght Cell|Name chars|Code|
-    * The Lenght cell has the higher bit set if an immediate word.
-    **/
+    Index Lastxt() => LinkToCode(dictHead, ds[dictHead + CELL_SIZE]);
+
     internal void DictAdd()
     {
         // First put the link
@@ -247,8 +254,6 @@ public class Vm {
         var a1 = Pop();
         Array.Copy(ds, a1, ds, a2, u + 1);
     }
-    /** Interpreting means first compiling to the code stack, then executing the opcodes
-     * if we are in Executing status. **/
     bool InterpretWord()
     {
         // TODO: optimize away string creation, requires not storing word to opcode/definition data in hashtables (I think).
@@ -257,21 +262,28 @@ public class Vm {
 
         Find();
         var res   = Pop();
-        var xt    = Pop();
+        var xt    = (Index)Pop();
 
+        // Manage user defined word.
         if(res != 0)
         {
-            PushOp(Op.Call, xt);
             var immediate = res == 1;
-            if(Executing || immediate) Execute();
+            if(Executing || immediate)
+                Execute(Op.Call, xt);
+            else
+                PushOp(Op.Call, xt);
             return true;
         }
+        // Manage simple primitives.
         if(WordToSimpleOp.TryGetValue(sl, out var op))
         {
-            PushOp(op);
-            if(Executing) Execute();
+            if(Executing)
+                Execute(op, null);
+            else
+                PushOp(op);
             return true;
         }
+        // Manage complex primitives.
         if(WordToDef.TryGetValue(sl, out var def))
         {
             def();
@@ -281,8 +293,10 @@ public class Vm {
     }
     void InterpretNumber(Cell value)
     {
-        PushOp(Op.Numb, value);
-        if(Executing) Execute();
+        if(Executing)
+            Execute(Op.Numb, value);
+        else
+            PushOp(Op.Numb, value);
     }
     internal bool IsEmptyWordC() => ds[Peek()] == 0;
 
@@ -318,29 +332,26 @@ public class Vm {
     internal void Bl()    => Push(' ');
     void State() => Push(state);
 
-    /** This is the main dynamic dispatch point. There is a large literature on how to do this faster.
-     * It seems that some form of computed goto is necessary (as gcc allows) for maximum performance.
-     * This is because of branch prediction in the cpu. With a switch statement you have just one jumping
-     * point for the cpu to predict. By adding calculated goto into each case statement, you give the cpu
-     * multiple decision point allowing better hit rate.
-     *
-     * TThe switch statement is translated to a jump table by the compiler, so you don't get better perf
-     * by using an array of delegate. I have also benchmarked that.
-     *
-     * TThe expectation is to execute code from ip to the end of the code segment, represented by cp.
-     **/
-    void Execute() {
+    void Execute(Op op, Cell? data) {
 
-        while(ip < herep) {
-            var op = cs[ip];
+        Index opLen = PushExecOp(op, data);
+        var ip      = code;
+
+        do {
+            var currentOp = (Op)ds[ip];
             ip++;
             Cell n;
-            Index count;
-            switch((Op)op) {
+            Index count, idx;
+            switch(currentOp) {
                 case Op.Numb:
-                    n = Read7BitEncodedCell(cs, ip, out count);
+                    n = Read7BitEncodedCell(ds, ip, out count);
                     Push(n);
                     ip += count;
+                    break;
+                case Op.NumbEx:
+                    n = ReadCell(ds, ip);
+                    Push(n);
+                    ip = (Index)RPop();
                     break;
                 case Op.Prin:
                     n = Pop();
@@ -412,25 +423,59 @@ public class Vm {
                 case Op.Mult:
                     Push(Pop() * Pop());
                     break;
+                case Op.Depth:
+                    Push(sp / CELL_SIZE);
+                    break;
+                case Op.RDepth:
+                    Push(rp / CELL_SIZE);
+                    break;
                 case Op.Divi:
                     var d = Pop();
                     var u = Pop();
                     Push(u / d);
+                    break;
+                case Op.Create:
+                    Push(' ');
+                    WordW();
+                    if(ds[Peek()] == 0) Throw("Make needs a subsequent word in the stream.");
+                    DictAdd();
+
+                    PushOp(Op.NumbEx);
+                    // Need to use full cell because it gets substituted by a jmp in does>
+                    // and I don't know how many cells the number I need to jump to takes
+                    WriteCell(ds, herep, herep + CELL_SIZE);
+                    herep += CELL_SIZE;
+                    break;
+                case Op.Does:
+                    // Allows redefinition of last defined word!!
+                    // Even in gforth!!
+                    idx = Lastxt();
+                    var addrToPush = ReadCell(ds, idx + 1);
+                    
+                    var tmpHerep = herep;
+                    herep = idx;
+                    PushOp(Op.Jmp, tmpHerep);
+                    herep = tmpHerep;
+                    PushOp(Op.Numb, addrToPush);
+                    PushUntilExit(ref ip);
+                    ip = (Index)RPop();
                     break;
                 case Op.Colo:
                     Push(' ');
                     WordW();
                     if(ds[Peek()] == 0) Throw("Colon needs a subsequent word in the stream.");
                     DictAdd();
-                    PushOp(Op.ToSemi);
-                    ip = herep;
                     Executing = false;
                     break;
                 case Op.Call:
-                    n = Read7BitEncodedCell(cs, ip, out count);
+                    n = Read7BitEncodedCell(ds, ip, out count);
                     ip += count;
                     RPush(ip);
                     ip = (Index)n;
+                    break;
+                case Op.Jmp:
+                    n = Read7BitEncodedCell(ds, ip, out _);
+                    ip = (Index) n;
                     break;
                 case Op.Exit:
                     ip = (Index)RPop();
@@ -439,7 +484,7 @@ public class Vm {
                     Throw($"{(Op)op} bytecode not supported.");
                     break;
             }
-        }
+        } while (ip != code + opLen);
     }
     /** These are internal to be able to test them. What a bother. **/
     internal void Push(Cell n)  => ps = Utils.Add(ps, ref sp, n);
@@ -458,11 +503,6 @@ public class Vm {
     internal void Depth()       => Push(sp / CELL_SIZE);
     internal void Swap()        { var a = Pop(); var b = Pop(); Push(a); Push(b); }
 
-    /** Refill fills out the input buffer at source, translating from UTF16 (.net) to UTF8 (what I want).
-     * It would be nice to have a separate segment for strings, but Forth requires them to be store in the
-     * Data Store, despite that been an array of long/ints generally. That is to allow mixed data structures
-     * containing both strings and values.
-     **/
     internal void Refill()
     {
         if(NextLine == null) Throw("Trying to Refill, without having passed a NextLine func");
@@ -643,4 +683,8 @@ static class Utils {
         howMany = (Index)stream.Position - howMany;
     }
 
+    internal static bool TakeVarNumber(byte b)
+        => b >= (int)Op.FirstTakeVarNumb && b < (int)Op.FirstTakeCell;
+    internal static bool TakeCell(byte b)
+        => b >= (int)Op.FirstTakeCell;
 }
