@@ -8,7 +8,7 @@ public enum Op {
     Error , Colo, Semi, Does, Plus, Minu, Mult, Divi, Prin,
     Count, Word, Refill, Comma, Here, At, Store, State, Bl, Dup, Exit,
     Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit, Create, RDepth, Depth,
-    Less, More, Equal, NotEqual,// End of 1 byte
+    Less, More, Equal, NotEqual, Do, Loop, ToR, FromR, I, J, // End of 1 byte
     Branch0, RelJmp, // End of 2 byte size
     NumbEx, // End of CELL Size 
     Jmp , Numb, Call, // End of Var number
@@ -91,6 +91,10 @@ public class Vm {
         { "drop"        , Op.Drop },
         { "drop2"       , Op.Drop2 },
         { "exit"        , Op.Exit },
+        { "i"           , Op.I },
+        { "j"           , Op.J },
+        { ">r"          , Op.ToR },
+        { "r>"          , Op.FromR },
     };
 
     /** While other words need to perfom more complicated actions at compile time **/
@@ -158,11 +162,20 @@ public class Vm {
                 WriteInt16(ds, herep, delta); 
                 herep += 2;
         }
+        void EmbedHereJmp0Bck() {
+                PushOp(Op.Loop);
+                var mark = (Index)Pop();
+                var delta = (short)(mark - herep);
+                WriteInt16(ds, herep, delta); 
+                herep += 2;
+        }
         WordToDef = new()
         {
             { "debug",  () => Debug = !Debug },
             { ";",      () => { PushOp(Op.Exit);  Executing = true; } },
             { "begin",        Mark },
+            { "do",     () => { PushOp(Op.Do); Mark(); } },
+            { "loop",         EmbedHereJmp0Bck},
             { "again",        EmbedHereJmpBck  },    
             { "if",           BranchAndMark },
             { "else",         EmbedInPoppedJmpFwd  },    
@@ -407,6 +420,12 @@ public class Vm {
                 case Op.Here:
                     Here();
                     break;
+                case Op.ToR:
+                    ToR();
+                    break;
+                case Op.FromR:
+                    FromR();
+                    break;
                 case Op.At:
                     At();
                     break;
@@ -531,6 +550,29 @@ public class Vm {
                     flag = Pop();
                     ip += flag == FALSE ? ReadInt16(ds, ip) : 2 ;
                     break;
+                case Op.Do:
+                    ToR();
+                    ToR();
+                    break;
+                case Op.I:
+                    Push(ReadCell(rs, rp - CELL_SIZE * 2));
+                    break;
+                case Op.J:
+                    Push(ReadCell(rs, rp - CELL_SIZE * 4));
+                    break;
+                case Op.Loop:
+                    var limit = RPop();
+                    var index = RPop();
+                    index++;
+                    bool bflag = index < limit; 
+                    if(bflag) {
+                        RPush(index);
+                        RPush(limit);
+                        ip += ReadInt16(ds, ip);
+                    }  else {
+                        ip += 2;
+                    }
+                    break;
                 case Op.RelJmp:
                     ip += ReadInt16(ds, ip);
                     break;
@@ -547,6 +589,8 @@ public class Vm {
 
     internal void RPush(Cell n) => rs = Utils.Add(rs, ref rp, n);
     internal Cell RPop()        => Utils.ReadBeforeIndex(rs, ref rp);
+    void ToR()                  => RPush(Pop());
+    void FromR()                => Push(RPop());
 
     internal void DPush(Cell n) => ds = Utils.Add(ds, ref herep, n);
 
