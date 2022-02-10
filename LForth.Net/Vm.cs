@@ -191,7 +191,14 @@ public class Vm {
                 var mark = (Index)Pop();
                 short delta = (short)(herep - mark);
                 WriteInt16(ds, mark, delta);
-            } }
+            } },
+            { "while",        BranchAndMark },    
+            { "repeat", () => {
+                var whileMark = (Index)Pop();
+                short delta   = (short)(herep + 3 - whileMark);
+                WriteInt16(ds, whileMark, delta);
+                EmbedHereJmpBck();
+                } },    
         };
     }
     public void Reset()
