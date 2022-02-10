@@ -7,12 +7,12 @@ using static Forth.Utils;
 public enum Op {
     Error , Colo, Semi, Does, Plus, Minu, Mult, Divi, Prin,
     Count, Word, Refill, Comma, Here, At, Store, State, Bl, Dup, Exit,
-    Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit, Create,
-    Jmp , Numb, Call,
-    NumbEx, 
-    FirstTakeVarNumb = Jmp, FirstTakeCell = NumbEx,
-    RDepth = 34,
-    Depth = 35
+    Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit, Create, RDepth, Depth,
+    Less, More, Equal, NotEqual,// End of 1 byte
+    Branch0, RelJmp, // End of 2 byte size
+    NumbEx, // End of CELL Size 
+    Jmp , Numb, Call, // End of Var number
+    FirstHasVarNumb = Jmp, FirstHas2Size = Branch0, FirstHasCellSize = NumbEx,
 }
 
 public class Vm {
@@ -78,10 +78,19 @@ public class Vm {
         { "-"           , Op.Minu },
         { "*"           , Op.Mult },
         { "/"           , Op.Divi },
+        { "<"           , Op.Less },
+        { ">"           , Op.More },
+        { "="           , Op.Equal },
+        { "<>"          , Op.NotEqual },
         { "create"      , Op.Create },
         { "does>"       , Op.Does },
         { "rdepth"      , Op.RDepth },
         { "depth"       , Op.Depth },
+        { "dup"         , Op.Dup },
+        { "dup2"        , Op.Dup2 },
+        { "drop"        , Op.Drop },
+        { "drop2"       , Op.Drop2 },
+        { "exit"        , Op.Exit },
     };
 
     /** While other words need to perfom more complicated actions at compile time **/
@@ -132,10 +141,36 @@ public class Vm {
         state   = herep;
         herep += CELL_SIZE;
 
+        void Mark()          => Push(herep);
+        void BranchAndMark() { PushOp(Op.Branch0); Mark(); herep += 2;}
+        void EmbedInPoppedJmpFwd() {
+                PushOp(Op.RelJmp);
+                var mark = (Index)Pop();
+                short delta = (short)((herep + 2) - mark);
+                WriteInt16(ds, mark, delta);
+                Push(herep);
+                herep += 2;
+        }
+        void EmbedHereJmpBck() {
+                PushOp(Op.RelJmp);
+                var mark = (Index)Pop();
+                var delta = (short)(mark - herep);
+                WriteInt16(ds, herep, delta); 
+                herep += 2;
+        }
         WordToDef = new()
         {
             { "debug",  () => Debug = !Debug },
             { ";",      () => { PushOp(Op.Exit);  Executing = true; } },
+            { "begin",        Mark },
+            { "again",        EmbedHereJmpBck  },    
+            { "if",           BranchAndMark },
+            { "else",         EmbedInPoppedJmpFwd  },    
+            { "then",   () => {
+                var mark = (Index)Pop();
+                short delta = (short)(herep - mark);
+                WriteInt16(ds, mark, delta);
+            } }
         };
     }
     public void Reset()
@@ -185,9 +220,9 @@ public class Vm {
         {
             var op = ds[ip];
             var count = 0;
-            if(Utils.TakeCell(op))
+            if(Utils.HasCellSize(op))
                 count = CELL_SIZE;
-            else if(Utils.TakeVarNumber(op))
+            else if(Utils.HasVarNumberSize(op))
                 Read7BitEncodedCell(ds, ip + 1, out count);
 
             Array.Copy(ds, ip, ds, herep, 1 + count);
@@ -340,7 +375,7 @@ public class Vm {
         do {
             var currentOp = (Op)ds[ip];
             ip++;
-            Cell n;
+            Cell n, flag;
             Index count, idx;
             switch(currentOp) {
                 case Op.Numb:
@@ -375,6 +410,12 @@ public class Vm {
                 case Op.At:
                     At();
                     break;
+                case Op.Drop:
+                    Drop();
+                    break;
+                case Op.Drop2:
+                    Drop2();
+                    break;
                 case Op.Store:
                     Store();
                     break;
@@ -392,12 +433,6 @@ public class Vm {
                     break;
                 case Op.Dup2:
                     Dup2();
-                    break;
-                case Op.Drop:
-                    Drop();
-                    break;
-                case Op.Drop2:
-                    Drop2();
                     break;
                 case Op.Find:
                     Find();
@@ -422,6 +457,18 @@ public class Vm {
                     break;
                 case Op.Mult:
                     Push(Pop() * Pop());
+                    break;
+                case Op.Less:
+                    Push(Pop() > Pop() ? TRUE : FALSE);
+                    break;
+                case Op.More:
+                    Push(Pop() < Pop() ? TRUE : FALSE);
+                    break;
+                case Op.Equal:
+                    Push(Pop() == Pop() ? TRUE : FALSE);
+                    break;
+                case Op.NotEqual:
+                    Push(Pop() != Pop() ? TRUE : FALSE);
                     break;
                 case Op.Depth:
                     Push(sp / CELL_SIZE);
@@ -480,6 +527,13 @@ public class Vm {
                 case Op.Exit:
                     ip = (Index)RPop();
                     break;
+                case Op.Branch0:
+                    flag = Pop();
+                    ip += flag == FALSE ? ReadInt16(ds, ip) : 2 ;
+                    break;
+                case Op.RelJmp:
+                    ip += ReadInt16(ds, ip);
+                    break;
                 default:
                     Throw($"{(Op)op} bytecode not supported.");
                     break;
@@ -515,6 +569,7 @@ public class Vm {
         }
         else
         {
+            inputBuffer = inputBuffer.Trim();
             input_len_chars = Encoding.UTF8.GetByteCount(inputBuffer);
             if (input_len_chars > source_max_chars)
                 throw new Exception(
@@ -636,6 +691,11 @@ static class Utils {
     internal static AChar ResetHighBit(AChar c) => (AChar)(HighBitMask & c);
     internal static AChar HighBitValue(AChar c) => (AChar) (c >> 7);
 
+    internal static void WriteInt16(AUnit[] ar, Index i, Int16 c)
+        => BinaryPrimitives.WriteInt16LittleEndian(new Span<byte>(ar, i, 2), c);
+    internal static Int16 ReadInt16(AUnit[] ar, Index i)
+        => BinaryPrimitives.ReadInt16LittleEndian(new Span<byte>(ar, i, 2));
+
     internal static void WriteCell(AUnit[] ar, Index i, Cell c)
 #if CELL32
         => BinaryPrimitives.WriteInt32LittleEndian(new Span<byte>(ar, i, Vm.CELL_SIZE), c);
@@ -683,8 +743,10 @@ static class Utils {
         howMany = (Index)stream.Position - howMany;
     }
 
-    internal static bool TakeVarNumber(byte b)
-        => b >= (int)Op.FirstTakeVarNumb && b < (int)Op.FirstTakeCell;
-    internal static bool TakeCell(byte b)
-        => b >= (int)Op.FirstTakeCell;
+    internal static bool Has2NumberSize(byte b)
+        => b >= (int)Op.FirstHas2Size && b < (int)Op.FirstHasCellSize;
+    internal static bool HasCellSize(byte b)
+        => b >= (int)Op.FirstHasCellSize && b < (int)Op.FirstHasVarNumb;
+    internal static bool HasVarNumberSize(byte b)
+        => b >= (int)Op.FirstHasVarNumb;
 }
