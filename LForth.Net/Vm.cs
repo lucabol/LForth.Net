@@ -8,7 +8,7 @@ public enum Op {
     Error , Colo, Semi, Does, Plus, Minu, Mult, Divi, Prin,
     Count, Word, Refill, Comma, Here, At, Store, State, Bl, Dup, Exit,
     Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit, Create, RDepth, Depth,
-    Less, More, Equal, NotEqual, Do, Loop, ToR, FromR, I, J, // End of 1 byte
+    Less, More, Equal, NotEqual, Do, Loop, LoopP, ToR, FromR, I, J, // End of 1 byte
     Branch0, RelJmp, // End of 2 byte size
     NumbEx, // End of CELL Size 
     Jmp , Numb, Call, // End of Var number
@@ -169,6 +169,13 @@ public class Vm {
                 WriteInt16(ds, herep, delta); 
                 herep += 2;
         }
+        void EmbedHereJmp0BckP() {
+                PushOp(Op.LoopP);
+                var mark = (Index)Pop();
+                var delta = (short)(mark - herep);
+                WriteInt16(ds, herep, delta); 
+                herep += 2;
+        }
         WordToDef = new()
         {
             { "debug",  () => Debug = !Debug },
@@ -176,6 +183,7 @@ public class Vm {
             { "begin",        Mark },
             { "do",     () => { PushOp(Op.Do); Mark(); } },
             { "loop",         EmbedHereJmp0Bck},
+            { "+loop",        EmbedHereJmp0BckP},
             { "again",        EmbedHereJmpBck  },    
             { "if",           BranchAndMark },
             { "else",         EmbedInPoppedJmpFwd  },    
@@ -388,8 +396,9 @@ public class Vm {
         do {
             var currentOp = (Op)ds[ip];
             ip++;
-            Cell n, flag;
+            Cell n, flag, index, limit, incr ;
             Index count, idx;
+            bool bflag;
             switch(currentOp) {
                 case Op.Numb:
                     n = Read7BitEncodedCell(ds, ip, out count);
@@ -561,10 +570,24 @@ public class Vm {
                     Push(ReadCell(rs, rp - CELL_SIZE * 4));
                     break;
                 case Op.Loop:
-                    var limit = RPop();
-                    var index = RPop();
+                    limit = RPop();
+                    index = RPop();
                     index++;
-                    bool bflag = index < limit; 
+                    bflag = index < limit; 
+                    if(bflag) {
+                        RPush(index);
+                        RPush(limit);
+                        ip += ReadInt16(ds, ip);
+                    }  else {
+                        ip += 2;
+                    }
+                    break;
+                case Op.LoopP:
+                    incr  = Pop();
+                    limit = RPop();
+                    index = RPop();
+                    index += incr;
+                    bflag = incr > 0 ? index < limit : index >= limit; 
                     if(bflag) {
                         RPush(index);
                         RPush(limit);
