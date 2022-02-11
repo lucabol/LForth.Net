@@ -1,14 +1,17 @@
 namespace Forth;
 
+using System.Collections;
 using System.Diagnostics.CodeAnalysis;
 using static Forth.Utils;
 
 
 public enum Op {
-    Error , Colo, Semi, Does, Plus, Minu, Mult, Divi, Prin,
-    Count, Word, Refill, Comma, Here, At, Store, State, Bl, Dup, Exit,
+    Error , Colo,  Does, Plus, Minu, Mult, Divi, Prin,
+    Count, Word, Refill, Comma, Here, At, Store, State, Bl, Dup, Exit, Immediate,
     Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit, Create, RDepth, Depth,
-    Less, More, Equal, NotEqual, Do, Loop, LoopP, ToR, FromR, I, J, Leave, // End of 1 byte
+    Less, More, Equal, NotEqual, Do, Loop, LoopP, ToR, FromR, I, J, Leave,
+    IDebug, ISemi, IPostpone, IBegin, IDo, ILoop, ILoopP, IAgain, IIf, IElse, IThen,
+    IWhile, IRepeat, // End of 1 byte
     Branch0, RelJmp, // End of 2 byte size
     NumbEx, // End of CELL Size 
     Jmp , Numb, Call, // End of Var number
@@ -96,10 +99,11 @@ public class Vm {
         { ">r"          , Op.ToR },
         { "r>"          , Op.FromR },
         { "leave"       , Op.Leave },
+        { "immediate"   , Op.Immediate },
     };
 
     /** While other words need to perfom more complicated actions at compile time **/
-    readonly Dictionary<string, Action> WordToDef = new();
+    readonly Dictionary<string, (Op, Action)> ImmediateWords = new();
 
     public Func<string>? NextLine = null;
 
@@ -180,29 +184,31 @@ public class Vm {
                 WriteInt16(ds, herep, delta); 
                 herep += 2;
         }
-        WordToDef = new()
+
+        ImmediateWords = new()
         {
-            { "debug",  () => Debug = !Debug },
-            { ";",      () => { PushOp(Op.Exit);  Executing = true; } },
-            { "begin",        Mark },
-            { "do",     () => { PushOp(Op.Do); herep += CELL_SIZE; Mark(); } },
-            { "loop",         EmbedHereJmp0Bck},
-            { "+loop",        EmbedHereJmp0BckP},
-            { "again",        EmbedHereJmpBck  },    
-            { "if",           BranchAndMark },
-            { "else",         EmbedInPoppedJmpFwd  },    
-            { "then",   () => {
+            { "debug",      (Op.IDebug,     () => Debug = !Debug) },
+            { ";",          (Op.ISemi,      () => { PushOp(Op.Exit);  Executing = true; }) },
+            { "postpone",   (Op.IPostpone,  Postpone) },
+            { "begin",      (Op.IBegin,     Mark) },
+            { "do",         (Op.IDo,        () => { PushOp(Op.Do); herep += CELL_SIZE; Mark(); }) },
+            { "loop",       (Op.ILoop,      EmbedHereJmp0Bck)},
+            { "+loop",      (Op.ILoopP,     EmbedHereJmp0BckP)},
+            { "again",      (Op.IAgain,     EmbedHereJmpBck)},    
+            { "if",         (Op.IIf,        BranchAndMark) },
+            { "else",       (Op.IElse,      EmbedInPoppedJmpFwd)  },    
+            { "then",       (Op.IThen,      () => {
                 var mark = (Index)Pop();
                 short delta = (short)(herep - mark);
                 WriteInt16(ds, mark, delta);
-            } },
-            { "while",        BranchAndMark },    
-            { "repeat", () => {
+            }) },
+            { "while",      (Op.IWhile,     BranchAndMark) },    
+            { "repeat",     (Op.IRepeat,    () => {
                 var whileMark = (Index)Pop();
                 short delta   = (short)(herep + 3 - whileMark);
                 WriteInt16(ds, whileMark, delta);
                 EmbedHereJmpBck();
-                } },    
+                }) },
         };
     }
     public void Reset()
@@ -226,8 +232,19 @@ public class Vm {
     }
     public IEnumerable<string> Words()
     {
-        return WordToSimpleOp.Keys.Concat(WordToDef.Keys);
+        return WordToSimpleOp.Keys.Concat(ImmediateWords.Keys);
     }
+
+    // TODO: clean this up, it now works because the default value of Op is 0 -> Error. It should use some kind of multidictionary here.
+    Action? ImmediateAction(Op op) {
+        var result =
+            ImmediateWords.FirstOrDefault(e => e.Value.Item1 == op);
+        if(result.Value.Item1 != default(Op))
+            return result.Value.Item2;
+        else
+            return null;
+    }
+
     void PushOp(Op op) {
         ds[herep] = (Code)op;
         herep++;
@@ -268,6 +285,7 @@ public class Vm {
     static Index LinkToCode(Index link, Index wordLen)
         // Addr + Link size + len size  + word chars
         => link + CELL_SIZE + CHAR_SIZE + CHAR_SIZE * wordLen;
+    static Index LinkToLen(Index link) => link + CELL_SIZE;
 
     internal void Find()
     {
@@ -321,18 +339,46 @@ public class Vm {
         var a1 = Pop();
         Array.Copy(ds, a1, ds, a2, u + 1);
     }
+    void Postpone()
+    {
+        Bl();
+        WordW();
+        Dup();
+        var sl = ToDotNetStringC();
+
+        Find();
+        var res = Pop();
+        var xt    = (Index)Pop();
+
+        if(res != FALSE) {
+            PushOp(Op.Call, xt);
+            return;
+        }
+
+        if(WordToSimpleOp.TryGetValue(sl, out var op)) {
+            PushOp(op);
+            return;
+        }
+
+        if(ImmediateWords.TryGetValue(sl, out var imm)) {
+            PushOp(imm.Item1);
+            return;
+        }
+
+        Throw($"{sl: don't know this word.}");
+    }
     bool InterpretWord()
     {
         // TODO: optimize away string creation, requires not storing word to opcode/definition data in hashtables (I think).
         Dup();
-        var sl = ToDotNetStringC();
+        var sl = ToDotNetStringC().ToLowerInvariant();
 
         Find();
         var res   = Pop();
         var xt    = (Index)Pop();
 
         // Manage user defined word.
-        if(res != 0)
+        if(res != FALSE)
         {
             var immediate = res == 1;
             if(Executing || immediate)
@@ -351,9 +397,9 @@ public class Vm {
             return true;
         }
         // Manage complex primitives.
-        if(WordToDef.TryGetValue(sl, out var def))
+        if(ImmediateWords.TryGetValue(sl, out var imm))
         {
-            def();
+            imm.Item2();
             return true;
         }
         return false;
@@ -515,6 +561,9 @@ public class Vm {
                 case Op.RDepth:
                     Push(rp / CELL_SIZE);
                     break;
+                case Op.Immediate:
+                    Utils.SetHighBit(ref ds[LinkToLen(dictHead)]);
+                    break;
                 case Op.Divi:
                     var d = Pop();
                     var u = Pop();
@@ -620,7 +669,13 @@ public class Vm {
                     ip += ReadInt16(ds, ip);
                     break;
                 default:
-                    Throw($"{(Op)op} bytecode not supported.");
+                    var a = ImmediateAction(currentOp); 
+                    if(a is not null)
+                    {
+                        a();
+                    } else {
+                        Throw($"{(Op)op} bytecode not supported.");
+                    }
                     break;
             }
         } while (ip != code + opLen);
@@ -774,9 +829,10 @@ static class Utils {
     const AChar HighBit     = 0b10000000; 
     const AChar HighBitMask = 0b01111111;
 
-    internal static bool  IsHighBitSet(AChar c) => (HighBit & c) != 0;
-    internal static AChar ResetHighBit(AChar c) => (AChar)(HighBitMask & c);
-    internal static AChar HighBitValue(AChar c) => (AChar) (c >> 7);
+    internal static bool  IsHighBitSet(AChar c)     => (HighBit & c) != 0;
+    internal static AChar ResetHighBit(AChar c)     => (AChar)(HighBitMask & c);
+    internal static void SetHighBit(ref AChar c)    => c = (AChar)(HighBit | c);
+    internal static AChar HighBitValue(AChar c)     => (AChar) (c >> 7);
 
     internal static void WriteInt16(AUnit[] ar, Index i, Int16 c)
         => BinaryPrimitives.WriteInt16LittleEndian(new Span<byte>(ar, i, 2), c);
