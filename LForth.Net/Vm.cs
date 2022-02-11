@@ -8,7 +8,7 @@ public enum Op {
     Error , Colo, Semi, Does, Plus, Minu, Mult, Divi, Prin,
     Count, Word, Refill, Comma, Here, At, Store, State, Bl, Dup, Exit,
     Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit, Create, RDepth, Depth,
-    Less, More, Equal, NotEqual, Do, Loop, LoopP, ToR, FromR, I, J, // End of 1 byte
+    Less, More, Equal, NotEqual, Do, Loop, LoopP, ToR, FromR, I, J, Leave, // End of 1 byte
     Branch0, RelJmp, // End of 2 byte size
     NumbEx, // End of CELL Size 
     Jmp , Numb, Call, // End of Var number
@@ -95,6 +95,7 @@ public class Vm {
         { "j"           , Op.J },
         { ">r"          , Op.ToR },
         { "r>"          , Op.FromR },
+        { "leave"       , Op.Leave },
     };
 
     /** While other words need to perfom more complicated actions at compile time **/
@@ -168,6 +169,9 @@ public class Vm {
                 var delta = (short)(mark - herep);
                 WriteInt16(ds, herep, delta); 
                 herep += 2;
+
+                var leaveTarget = mark - CELL_SIZE;
+                WriteCell(ds, leaveTarget, herep);
         }
         void EmbedHereJmp0BckP() {
                 PushOp(Op.LoopP);
@@ -181,7 +185,7 @@ public class Vm {
             { "debug",  () => Debug = !Debug },
             { ";",      () => { PushOp(Op.Exit);  Executing = true; } },
             { "begin",        Mark },
-            { "do",     () => { PushOp(Op.Do); Mark(); } },
+            { "do",     () => { PushOp(Op.Do); herep += CELL_SIZE; Mark(); } },
             { "loop",         EmbedHereJmp0Bck},
             { "+loop",        EmbedHereJmp0BckP},
             { "again",        EmbedHereJmpBck  },    
@@ -567,6 +571,8 @@ public class Vm {
                     ip += flag == FALSE ? ReadInt16(ds, ip) : 2 ;
                     break;
                 case Op.Do:
+                    RPush(ReadCell(ds, ip));
+                    ip += CELL_SIZE;
                     ToR();
                     ToR();
                     break;
@@ -574,7 +580,12 @@ public class Vm {
                     Push(ReadCell(rs, rp - CELL_SIZE * 2));
                     break;
                 case Op.J:
-                    Push(ReadCell(rs, rp - CELL_SIZE * 4));
+                    Push(ReadCell(rs, rp - CELL_SIZE * 5));
+                    break;
+                case Op.Leave:
+                    RPop();
+                    RPop();
+                    ip = (Index)RPop();
                     break;
                 case Op.Loop:
                     limit = RPop();
@@ -586,6 +597,7 @@ public class Vm {
                         RPush(limit);
                         ip += ReadInt16(ds, ip);
                     }  else {
+                        RPop();
                         ip += 2;
                     }
                     break;
@@ -600,6 +612,7 @@ public class Vm {
                         RPush(limit);
                         ip += ReadInt16(ds, ip);
                     }  else {
+                        RPop();
                         ip += 2;
                     }
                     break;
