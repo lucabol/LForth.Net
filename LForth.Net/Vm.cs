@@ -11,7 +11,7 @@ public enum Op {
     Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit, Create, RDepth, Depth,
     Less, More, Equal, NotEqual, Do, Loop, LoopP, ToR, FromR, I, J, Leave,
     IDebug, ISemi, IPostpone, IBegin, IDo, ILoop, ILoopP, IAgain, IIf, IElse, IThen,
-    IWhile, IRepeat, // End of 1 byte
+    IWhile, IRepeat, IBrakO, IBrakC, // End of 1 byte
     Branch0, RelJmp, // End of 2 byte size
     NumbEx, // End of CELL Size 
     Jmp , Numb, Call, // End of Var number
@@ -188,6 +188,8 @@ public class Vm {
         ImmediateWords = new()
         {
             { "debug",      (Op.IDebug,     () => Debug = !Debug) },
+            { "[",          (Op.IBrakO,     () => Executing = true) },
+            { "]",          (Op.IBrakC,     () => Executing = false) },
             { ";",          (Op.ISemi,      () => { PushOp(Op.Exit);  Executing = true; }) },
             { "postpone",   (Op.IPostpone,  Postpone) },
             { "begin",      (Op.IBegin,     Mark) },
