@@ -1,30 +1,82 @@
 ﻿using Forth;
 using static System.Console;
 
+using CommandLine;
+using CommandLine.Text;
+
+var verbose = false;
+
 Vm vm = new();
-vm.NextLine = NextLine;
+var parser       = new CommandLine.Parser(with => with.HelpWriter = null);
+var parserResult = parser.ParseArguments<Options>(args);
+parserResult
+    .WithParsed<Options>(options => Run(options))
+    .WithNotParsed(errs => DisplayHelp(parserResult, errs));
 
-WriteLine("Say 'bye' to exit. No output means all good.");
-System.ReadLine.HistoryEnabled = true;
+void Run(Options o) {
 
-while(true)
-    try
-    {
-        vm.Quit();
-    } catch(ForthException e) { 
-        ColorLine(ConsoleColor.Red, e.Message);
-        vm.Reset();
-    } catch(ArgumentOutOfRangeException e) {
-        if(e.StackTrace?.ToString().Contains("Pop") is not null)
-            ColorLine(ConsoleColor.Red, "Possible stack underflow (it is expensive to check). Enable 'debug' to see the full exception.");
-        if(vm.Debug) ColorLine(ConsoleColor.Gray, e.ToString());
-        vm.Reset();
-    } catch(Exception e)
-    {
-        ColorLine(ConsoleColor.Red, e.Message + " Enable 'debug' to see the full exception.");
-        if(vm.Debug) ColorLine(ConsoleColor.Gray, e.ToString());
-        vm.Reset();
+    ValidateOptions(o);
+
+    WriteLine("LForth.Net by Luca Bolognese (2022)");
+    WriteLine("Say 'bye' to exit. 'debug' to see more. The rest is Forth.\n");
+    System.ReadLine.HistoryEnabled = true;
+
+    InterpretFile("init.fth");
+
+    verbose = o.Verbose;
+
+    foreach (var fileName in o.Files)
+        InterpretFile(fileName);
+
+    if(o.Exec is not null)
+        vm.EvaluateSingleLine(o.Exec);
+
+    vm.NextLine = NextLine;
+    while(true)
+        try
+        {
+            vm.Quit();
+        } catch(ForthException e) { 
+            ColorLine(ConsoleColor.Red, e.Message);
+            vm.Reset();
+        } catch(ArgumentOutOfRangeException e) {
+            if(e.StackTrace?.ToString().Contains("Pop") is not null)
+                ColorLine(ConsoleColor.Red, "Possible stack underflow (it is expensive to check). Enable 'debug' to see the full exception.");
+            if(vm.Debug) ColorLine(ConsoleColor.Gray, e.ToString());
+            vm.Reset();
+        } catch(Exception e)
+        {
+            ColorLine(ConsoleColor.Red, e.Message + " Enable 'debug' to see the full exception.");
+            if(vm.Debug) ColorLine(ConsoleColor.Gray, e.ToString());
+            vm.Reset();
+        }
+}
+
+static void DisplayHelp<T>(ParserResult<T> result, IEnumerable<Error> errs)
+{
+  var helpText = HelpText.AutoBuild(result, h =>
+  {
+    h.AdditionalNewLineAfterOption = false;
+    h.AddPreOptionsLine("Usage: nforth [Forth files] [Options]");
+    h.AddPostOptionsText
+        ("EXAMPLES:\n\tnforth\n\tnforth Test1.fth Test2.fth -e bye\n\tnforth Test1.fth Test2.fth -o Forth.cs");
+    return HelpText.DefaultParsingErrorsHandler(result, h);
+  }, e => e);
+
+  Console.WriteLine(helpText);
+}
+
+void ValidateOptions(Options o) {
+    if(o.Exec != null && o.Output != null) {
+        WriteLine("You can either execute or compile code, not both.");
+        Environment.Exit(1);
     }
+    if(o.Output != null && (o.Files == null || !o.Files.Any())) {
+        WriteLine("You say you want to compile, but didn't pass any files.");
+        Environment.Exit(1);
+    }
+    verbose = o.Verbose;
+}
 
 string NextLine() {
     
@@ -39,6 +91,29 @@ string NextLine() {
         return line;
 };
 
+
+void VWrite(string s)     { if(verbose) Write(s); };
+void VWriteLine(string s) { if(verbose) Write(s); };
+
+void InterpretFile(string fileName)
+{
+
+    var lineNum = 0;
+    var lineText = "";
+
+    try {
+        VWrite($"Interpreting file {fileName} ...");
+        var stream = File.OpenRead(fileName);
+        var reader = new StreamReader(stream);
+        vm.NextLine = () => { lineNum++; lineText = reader.ReadLine()! ; return lineText; };
+        vm.Quit();
+        VWriteLine(" done.\n");
+    } catch(Exception)
+    {
+        ColorLine(ConsoleColor.Red, $"Line: {lineNum}\n{lineText}");
+        throw; 
+    }
+}
 void ColorLine(ConsoleColor color, string s) {
     var backupcolor = ForegroundColor;
     ForegroundColor = color;
@@ -64,4 +139,18 @@ class AutoCompletionHandler : IAutoCompleteHandler
     public AutoCompletionHandler(Vm vm) {
         words = vm.Words();
     }
+}
+
+class Options {
+    [Option('e', "exec [forthstring]", Required = false, HelpText = "Execute forthstring after starting up.")]
+    public string? Exec {get; set;}
+
+    [Option('o', "output [csfile]", Required = false, HelpText = "Compile code in the Forth files to csfile.")]
+    public string? Output {get; set;}
+
+    [Value(0, MetaName="Forth files", HelpText = "Optional Forth files to compile or execute.")]
+    public IEnumerable<string>? Files {get; set;}
+
+    [Option('v', "verbose", Required = false, HelpText = "Produce verbose output.")]
+    public bool Verbose {get; set;} = false;
 }

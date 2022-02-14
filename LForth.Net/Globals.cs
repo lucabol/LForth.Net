@@ -17,7 +17,9 @@ global using System.Runtime.CompilerServices;
 global using System.Runtime.InteropServices;
 global using System.Buffers.Binary;
 global using System.Numerics;
+
 global using GitVarInt;
+
 
 [assembly:InternalsVisibleTo("LForth.Net.Tests")]
 

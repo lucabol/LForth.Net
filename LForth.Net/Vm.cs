@@ -6,16 +6,19 @@ using static Forth.Utils;
 
 
 public enum Op {
-    Error , Colo,  Does, Plus, Minu, Mult, Divi, Prin,
+    Error , Colo,  Does, Plus, Minu, Mult, Divi, Prin, Base,
     Count, Word, Refill, Comma, Here, At, Store, State, Bl, Dup, Exit, Immediate,
     Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit, Create, RDepth, Depth,
-    Less, More, Equal, NotEqual, Do, Loop, LoopP, ToR, FromR, I, J, Leave,
+    Less, More, Equal, NotEqual, Do, Loop, LoopP, ToR, FromR, I, J, Leave, Cr,
+    Source, Type, Emit, Char, In, Over, And, Or, Allot, Cells,
     IDebug, ISemi, IPostpone, IBegin, IDo, ILoop, ILoopP, IAgain, IIf, IElse, IThen,
-    IWhile, IRepeat, IBrakO, IBrakC, // End of 1 byte
+    IWhile, IRepeat, IBrakO, IBrakC, IChar,// End of 1 byte
     Branch0, RelJmp, // End of 2 byte size
     NumbEx, // End of CELL Size 
     Jmp , Numb, Call, // End of Var number
+    ICStr, // End of string words
     FirstHasVarNumb = Jmp, FirstHas2Size = Branch0, FirstHasCellSize = NumbEx,
+    FirstStringWord = ICStr,
 }
 
 public class Vm {
@@ -43,6 +46,7 @@ public class Vm {
 
     /** This is the base to interpret numbers. **/
     readonly Index base_p;
+
     /** State TRUE when compiling, FALSE when interpreting. **/
     readonly Index state;
     bool Executing { get => ReadCell (ds, state) == FALSE;
@@ -64,6 +68,11 @@ public class Vm {
     {
         { "."           , Op.Prin },
         { "count"       , Op.Count },
+        { "cells"       , Op.Cells },
+        { "allot"       , Op.Allot },
+        { "and"         , Op.And },
+        { "or"          , Op.Or },
+        { "base"        , Op.Base },
         { "refill"      , Op.Refill },
         { "interpret"   , Op.Interpret },
         { "quit"        , Op.Quit },
@@ -88,7 +97,9 @@ public class Vm {
         { "create"      , Op.Create },
         { "does>"       , Op.Does },
         { "rdepth"      , Op.RDepth },
+        { "swap"        , Op.Swap },
         { "depth"       , Op.Depth },
+        { "over"        , Op.Over },
         { "dup"         , Op.Dup },
         { "dup2"        , Op.Dup2 },
         { "drop"        , Op.Drop },
@@ -100,6 +111,12 @@ public class Vm {
         { "r>"          , Op.FromR },
         { "leave"       , Op.Leave },
         { "immediate"   , Op.Immediate },
+        { "source"      , Op.Source },
+        { "type"        , Op.Type },
+        { "emit"        , Op.Emit },
+        { "cr"          , Op.Cr },
+        { "char"        , Op.Char },
+        { ">in"         , Op.In },
     };
 
     /** While other words need to perfom more complicated actions at compile time **/
@@ -188,6 +205,7 @@ public class Vm {
         ImmediateWords = new()
         {
             { "debug",      (Op.IDebug,     () => Debug = !Debug) },
+            { "[char]",     (Op.IChar,      () => { Char(); PushOp(Op.Numb, Pop());}) },
             { "[",          (Op.IBrakO,     () => Executing = true) },
             { "]",          (Op.IBrakC,     () => Executing = false) },
             { ";",          (Op.ISemi,      () => { PushOp(Op.Exit);  Executing = true; }) },
@@ -211,11 +229,37 @@ public class Vm {
                 WriteInt16(ds, whileMark, delta);
                 EmbedHereJmpBck();
                 }) },
+            { "c\"",         (Op.ICStr,() => {
+                PushOp(Op.ICStr);
+
+                Push('"');
+                WordW();
+                Index len = ds[Peek()];
+                Push(herep);
+                Push(len + 1);
+                CMove();
+                if(Executing) Push(herep);
+                herep += len;
+                }) },
         };
     }
     public void Reset()
     {
         sp = 0; rp = 0; Executing = true; ds[inp] = 0;
+    }
+    public void EvaluateSingleLine(string s)
+    {
+        var oldLine = NextLine;
+        try { 
+            NextLine = () => s;
+            Refill();
+            if(Pop() == TRUE)
+                Interpret();
+        } finally
+        {
+            NextLine = oldLine;
+        }
+
     }
     public void Quit()
     {
@@ -241,12 +285,19 @@ public class Vm {
     Action? ImmediateAction(Op op) {
         var result =
             ImmediateWords.FirstOrDefault(e => e.Value.Item1 == op);
-        if(result.Value.Item1 != default(Op))
+        if(result.Value.Item1 != default)
             return result.Value.Item2;
         else
             return null;
     }
 
+    void LowerCase()
+    {
+        var s  = (Index)Peek();
+        var bs = new Span<byte>(ds, s + 1, ds[s]);
+        foreach(ref byte b in bs)
+            b = (byte) char.ToLowerInvariant((char)b); 
+    }
     void PushOp(Op op) {
         ds[herep] = (Code)op;
         herep++;
@@ -262,6 +313,7 @@ public class Vm {
     {
         ds[code] = (Code)op;
         var howMany = 0;
+
         if(value is not null) Write7BitEncodedCell(ds, code + 1, (Cell)value, out howMany);
         return howMany + 1;
     }
@@ -275,6 +327,8 @@ public class Vm {
                 count = CELL_SIZE;
             else if(Utils.HasVarNumberSize(op))
                 Read7BitEncodedCell(ds, ip + 1, out count);
+            else if(Utils.HasStringSize(op))
+                count += ds[ip + 1] + 1; // Size of string + 1 for the len byte.
 
             Array.Copy(ds, ip, ds, herep, 1 + count);
             ip += 1 + count;
@@ -329,7 +383,7 @@ public class Vm {
         // Copy word to here
         var len = ds[(Index)Peek()];
         Push(herep);
-        Push(len);
+        Push(len + 1);
         CMove();
         herep += len + 1;
 
@@ -339,12 +393,13 @@ public class Vm {
         var u  = Pop();
         var a2 = Pop();
         var a1 = Pop();
-        Array.Copy(ds, a1, ds, a2, u + 1);
+        Array.Copy(ds, a1, ds, a2, u);
     }
     void Postpone()
     {
         Bl();
         WordW();
+        LowerCase();
         Dup();
         var sl = ToDotNetStringC();
 
@@ -371,6 +426,8 @@ public class Vm {
     }
     bool InterpretWord()
     {
+        LowerCase();
+
         // TODO: optimize away string creation, requires not storing word to opcode/definition data in hashtables (I think).
         Dup();
         var sl = ToDotNetStringC().ToLowerInvariant();
@@ -415,6 +472,31 @@ public class Vm {
     }
     internal bool IsEmptyWordC() => ds[Peek()] == 0;
 
+    bool TryParseNumber(string s, out Cell n)
+    {
+        var res = false;
+        var b = ds[base_p];
+        // TODO: is there a way to speed this up without recoding the whole thing?
+        // Recoding might not be bad as we could support bases other than
+        // 
+        try {
+#if CELL32
+            n = Convert.ToInt32(s, b);
+#else
+            n = Convert.ToInt64(s, b);
+#endif
+            res = true;
+        } catch (FormatException )
+        {
+            // This is not acturally an exception case in Forth.
+            n = 0;    
+
+        } catch(OverflowException)
+        {
+            throw;
+        }
+        return res;
+    }
     void Interpret()
     {
         while(true)
@@ -427,7 +509,7 @@ public class Vm {
             Dup();
             var s = ToDotNetStringC();
             if(!InterpretWord()) {
-                if(Cell.TryParse(s, out Cell n))
+                if(TryParseNumber(s, out Cell n))
                     InterpretNumber(n);
                 else
                     Throw($"{s} is not a recognized word or number.");
@@ -459,6 +541,37 @@ public class Vm {
             Index count, idx;
             bool bflag;
             switch(currentOp) {
+                case Op.Source:
+                    Source();
+                    break;
+                case Op.Base:
+                    Push(base_p);
+                    break;
+                case Op.Emit:
+                    Console.Write((char)Pop());
+                    break;
+                case Op.Type:
+                    Console.WriteLine(ToDotNetString());
+                    break;
+                case Op.Allot:
+                    herep += (Index)Pop();
+                    break;
+                case Op.Cells:
+                    Push(Pop() * CELL_SIZE);
+                    break;
+                case Op.Cr:
+                    Console.WriteLine();
+                    break;
+                case Op.In:
+                    Push(inp);
+                    break;
+                case Op.Char:
+                    Char();
+                    break;
+                case Op.ICStr:
+                    Push(ip);
+                    ip += ds[ip];
+                    break;
                 case Op.Numb:
                     n = Read7BitEncodedCell(ds, ip, out count);
                     Push(n);
@@ -471,7 +584,7 @@ public class Vm {
                     break;
                 case Op.Prin:
                     n = Pop();
-                    Console.Write($"{n} ");
+                    Console.Write($"{Convert.ToString(n, ds[base_p])} ");
                     break;
                 case Op.Count:
                     Count();
@@ -518,6 +631,9 @@ public class Vm {
                 case Op.Swap:
                     Swap();
                     break;
+                case Op.Over:
+                    Over();
+                    break;
                 case Op.Dup2:
                     Dup2();
                     break;
@@ -535,6 +651,12 @@ public class Vm {
                     break;
                 case Op.Interpret:
                     Interpret();
+                    break;
+                case Op.And:
+                    Push(Pop() & Pop());
+                    break;
+                case Op.Or:
+                    Push(Pop() | Pop());
                     break;
                 case Op.Plus:
                     Push(Pop() + Pop());
@@ -575,6 +697,7 @@ public class Vm {
                     Push(' ');
                     WordW();
                     if(ds[Peek()] == 0) Throw("Make needs a subsequent word in the stream.");
+                    LowerCase();
                     DictAdd();
 
                     PushOp(Op.NumbEx);
@@ -601,6 +724,7 @@ public class Vm {
                     Push(' ');
                     WordW();
                     if(ds[Peek()] == 0) Throw("Colon needs a subsequent word in the stream.");
+                    LowerCase();
                     DictAdd();
                     Executing = false;
                     break;
@@ -699,8 +823,17 @@ public class Vm {
     internal void At()          => Push(Utils.ReadCell(ds, (Index)Pop()));
     internal void Here()        => Push(herep);
     internal void Depth()       => Push(sp / CELL_SIZE);
+    internal void Over()        => Push(ReadCell(ps, sp - CELL_SIZE * 2));
     internal void Swap()        { var a = Pop(); var b = Pop(); Push(a); Push(b); }
 
+    void Char()
+    {
+        Bl();
+        WordW();
+        var idx = (Index)Pop();
+        if(ds[idx] == 0) Throw("'char' need more input.");
+        Push(ds[idx + 1]);
+    }
     internal void Refill()
     {
         if(NextLine == null) Throw("Trying to Refill, without having passed a NextLine func");
@@ -792,7 +925,7 @@ public class Vm {
 
         var w = ToChars(toPtr, word_max_chars);
 
-        var j = 1; // It is a counted string, the first 4 bytes contains the length
+        var j = 1; // It is a counted string, the first byte contains the length
 
         ref var index = ref ds[this.inp];
 
@@ -893,5 +1026,7 @@ static class Utils {
     internal static bool HasCellSize(byte b)
         => b >= (int)Op.FirstHasCellSize && b < (int)Op.FirstHasVarNumb;
     internal static bool HasVarNumberSize(byte b)
-        => b >= (int)Op.FirstHasVarNumb;
+        => b >= (int)Op.FirstHasVarNumb && b < (int) Op.FirstStringWord;
+    internal static bool HasStringSize(byte b)
+        => b >= (int)Op.FirstStringWord;
 }
