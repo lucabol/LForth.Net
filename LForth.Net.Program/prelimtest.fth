@@ -182,7 +182,7 @@ VARIABLE TIMM1 0 TIMM1 !
 : TIMM3 TIMM2 ; TIMM1 @ 123 = ?~ Error #49: testing IMMEDIATE
 
 : ?DEFINED  ( "name" -- 0 | -1 )  32 WORD FIND SWAP DROP 0= 0= ;
-?DEFINED SWAP ?~ Error #50: testing FIND ?DEFINED
+?DEFINED SWAP 0= ?~ Error #50: testing FIND ?DEFINED
 ?DEFINED <<no-such-word-hopefully>> 0= ?~ Error #51 testing FIND ?DEFINED
 
 ?DEFINED \ ?~ : \ ~ ; IMMEDIATE 

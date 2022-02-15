@@ -10,13 +10,13 @@ public enum Op {
     Count, Word, Refill, Comma, Here, At, Store, State, Bl, Dup, Exit, Immediate,
     Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit, Create, RDepth, Depth,
     Less, More, Equal, NotEqual, Do, Loop, LoopP, ToR, FromR, I, J, Leave, Cr,
-    Source, Type, Emit, Char, In, Over, And, Or, Allot, Cells,
+    Source, Type, Emit, Char, In, Over, And, Or, Allot, Cells, Exec,
     IDebug, ISemi, IPostpone, IBegin, IDo, ILoop, ILoopP, IAgain, IIf, IElse, IThen,
     IWhile, IRepeat, IBrakO, IBrakC, IChar,// End of 1 byte
-    Branch0, RelJmp, // End of 2 byte size
+    Branch0, RelJmp, ImmCall, // End of 2 byte size
     NumbEx, // End of CELL Size 
     Jmp , Numb, Call, // End of Var number
-    ICStr, // End of string words
+    ICStr, ISStr, // End of string words
     FirstHasVarNumb = Jmp, FirstHas2Size = Branch0, FirstHasCellSize = NumbEx,
     FirstStringWord = ICStr,
 }
@@ -117,7 +117,11 @@ public class Vm {
         { "cr"          , Op.Cr },
         { "char"        , Op.Char },
         { ">in"         , Op.In },
+        { "find"        , Op.Find },
+        { "execute"     , Op.Exec },
     };
+    /** The xts are created on demand **/
+    readonly Dictionary<Op, Index> xts = new();
 
     /** While other words need to perfom more complicated actions at compile time **/
     readonly Dictionary<string, (Op, Action)> ImmediateWords = new();
@@ -201,6 +205,21 @@ public class Vm {
                 WriteInt16(ds, herep, delta); 
                 herep += 2;
         }
+        Action EmbedString(Op op) { return () =>
+            {
+                PushOp(op);
+
+                Push('"');
+                WordW();
+                Index len = ds[Peek()];
+                Push(herep);
+                Push(len + 1);
+                CMove();
+                if(Executing && op == Op.ICStr) Push(herep);
+                if(Executing && op == Op.ISStr) { Push(herep + 1); Push(len); }
+                herep += len + 1;
+            };
+        }
 
         ImmediateWords = new()
         {
@@ -229,18 +248,8 @@ public class Vm {
                 WriteInt16(ds, whileMark, delta);
                 EmbedHereJmpBck();
                 }) },
-            { "c\"",         (Op.ICStr,() => {
-                PushOp(Op.ICStr);
-
-                Push('"');
-                WordW();
-                Index len = ds[Peek()];
-                Push(herep);
-                Push(len + 1);
-                CMove();
-                if(Executing) Push(herep);
-                herep += len;
-                }) },
+            { "c\"",         (Op.ICStr, EmbedString(Op.ICStr)) },
+            { "s\"",         (Op.ISStr, EmbedString(Op.ISStr)) },
         };
     }
     public void Reset()
@@ -343,7 +352,60 @@ public class Vm {
         => link + CELL_SIZE + CHAR_SIZE + CHAR_SIZE * wordLen;
     static Index LinkToLen(Index link) => link + CELL_SIZE;
 
-    internal void Find()
+    void Find()
+    {
+        // Look for user defined word
+        var caddr = (Index)Peek();
+        FindUserDefinedWord();
+        var found = Peek() != FALSE;
+        if(found) return;
+
+        var clen  = ds[caddr];
+        var cspan = new Span<AChar>(ds, caddr + 1 * CHAR_SIZE, clen);
+        var sl    = Encoding.UTF8.GetString(cspan);
+
+        // Look for simple statements
+        if(WordToSimpleOp.TryGetValue(sl, out var op))
+        {
+            if(xts.TryGetValue(op, out var xt))
+                Ret(xt, -1);
+            else
+                RetNewOp(op);
+            return;
+        }
+        // Look for immediate words
+        if(ImmediateWords.TryGetValue(sl, out var imm))
+        {
+            if(xts.TryGetValue(imm.Item1, out var xt))
+                Ret(xt, 1);
+            else
+                RetNewImmediateOp(imm.Item1);
+            return;
+        }
+        // Getting here, we return the result of FindUserDefinedWord. Below utility funcs.
+        void RetNewImmediateOp(Op op)
+        {
+            var xt = herep;
+            PushOp(Op.ImmCall);
+            PushOp(op);
+            PushOp(Op.Exit);
+            Ret(herep, 1);
+            xts.Add(op, xt);
+        }
+        void RetNewOp(Op op)
+        {
+            var xt = herep;
+            PushOp(op);
+            PushOp(Op.Exit);
+            Ret(xt, -1);
+            xts.Add(op, xt);
+        }
+        void Ret(Index xt, Cell f)
+        {
+            Drop(); Drop(); Push(xt); Push(f);
+        }
+    }
+    internal void FindUserDefinedWord()
     {
         var caddr = (Index)Pop();
         var clen  = ds[caddr];
@@ -386,7 +448,6 @@ public class Vm {
         Push(len + 1);
         CMove();
         herep += len + 1;
-
     }
     void CMove()
     {
@@ -432,7 +493,7 @@ public class Vm {
         Dup();
         var sl = ToDotNetStringC().ToLowerInvariant();
 
-        Find();
+        FindUserDefinedWord();
         var res   = Pop();
         var xt    = (Index)Pop();
 
@@ -502,7 +563,7 @@ public class Vm {
         while(true)
         {
             Bl();
-            WordW();
+            WordW(inKeyword: true);
             if(IsEmptyWordC()) { Drop(); break;};
 
             // TODO: remove string allocation from main loop.
@@ -551,13 +612,27 @@ public class Vm {
                     Console.Write((char)Pop());
                     break;
                 case Op.Type:
-                    Console.WriteLine(ToDotNetString());
+                    Console.Write(ToDotNetString());
+                    break;
+                case Op.ImmCall:
+                    var act = ImmediateAction((Op)ds[ip]);
+                    if(act is null) Throw($"ImmCall with a non existing op: {(Op)ds[ip]}");
+                    act();
+                    ip = (Index)RPop();
                     break;
                 case Op.Allot:
                     herep += (Index)Pop();
                     break;
                 case Op.Cells:
                     Push(Pop() * CELL_SIZE);
+                    break;
+                case Op.Find:
+                    Find();
+                    break;
+                case Op.Exec:
+                    idx = (Index)Pop();
+                    RPush(ip);
+                    ip = (Index)idx;
                     break;
                 case Op.Cr:
                     Console.WriteLine();
@@ -570,7 +645,13 @@ public class Vm {
                     break;
                 case Op.ICStr:
                     Push(ip);
-                    ip += ds[ip];
+                    ip += ds[ip] + 1;
+                    break;
+                case Op.ISStr:
+                    Push(ip + 1);
+                    idx = ds[ip];
+                    Push(idx);
+                    ip += idx + 1;
                     break;
                 case Op.Numb:
                     n = Read7BitEncodedCell(ds, ip, out count);
@@ -636,9 +717,6 @@ public class Vm {
                     break;
                 case Op.Dup2:
                     Dup2();
-                    break;
-                case Op.Find:
-                    Find();
                     break;
                 case Op.Bye:
                     Environment.Exit(0);

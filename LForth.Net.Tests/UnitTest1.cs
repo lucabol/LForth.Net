@@ -133,7 +133,7 @@ public class UnitTest1
         {
            vm.Bl();
            vm.WordW();
-           vm.Find();
+           vm.FindUserDefinedWord();
            Assert.Equal(-1, vm.Pop());
            vm.Drop(); // Dropping the xt
         }
