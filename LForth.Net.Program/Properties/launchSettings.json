@@ -5,7 +5,7 @@
     },
     "File": {
       "commandName": "Project",
-      "commandLineArgs": "prelimtest.fth"
+      "commandLineArgs": "prelimtest.fth -e bye"
     }
   }
 }

@@ -17,19 +17,17 @@ void Run(Options o) {
 
     ValidateOptions(o);
 
-    WriteLine("LForth.Net by Luca Bolognese (2022)");
-    WriteLine("Say 'bye' to exit. 'debug' to see more. The rest is Forth.\n");
-    System.ReadLine.HistoryEnabled = true;
-
     InterpretFile("init.fth");
-
-    verbose = o.Verbose;
 
     foreach (var fileName in o.Files)
         InterpretFile(fileName);
 
     if(o.Exec is not null)
         vm.EvaluateSingleLine(o.Exec);
+
+    WriteLine("LForth.Net by Luca Bolognese (2022)");
+    WriteLine("Say 'bye' to exit. 'debug' to see more. The rest is Forth.\n");
+    System.ReadLine.HistoryEnabled = true;
 
     vm.NextLine = NextLine;
     while(true)
@@ -57,9 +55,9 @@ static void DisplayHelp<T>(ParserResult<T> result, IEnumerable<Error> errs)
   var helpText = HelpText.AutoBuild(result, h =>
   {
     h.AdditionalNewLineAfterOption = false;
-    h.AddPreOptionsLine("Usage: nforth [Forth files] [Options]");
+    h.AddPreOptionsLine("Usage: lforth [Forth files] [Options]");
     h.AddPostOptionsText
-        ("EXAMPLES:\n\tnforth\n\tnforth Test1.fth Test2.fth -e bye\n\tnforth Test1.fth Test2.fth -o Forth.cs");
+        ("EXAMPLES:\n\tlforth\n\tlforth Test1.fth Test2.fth -e bye\n\tlforth Test1.fth Test2.fth -o Forth.fim");
     return HelpText.DefaultParsingErrorsHandler(result, h);
   }, e => e);
 
@@ -67,10 +65,6 @@ static void DisplayHelp<T>(ParserResult<T> result, IEnumerable<Error> errs)
 }
 
 void ValidateOptions(Options o) {
-    if(o.Exec != null && o.Output != null) {
-        WriteLine("You can either execute or compile code, not both.");
-        Environment.Exit(1);
-    }
     if(o.Output != null && (o.Files == null || !o.Files.Any())) {
         WriteLine("You say you want to compile, but didn't pass any files.");
         Environment.Exit(1);
@@ -145,7 +139,7 @@ class Options {
     [Option('e', "exec [forthstring]", Required = false, HelpText = "Execute forthstring after starting up.")]
     public string? Exec {get; set;}
 
-    [Option('o', "output [csfile]", Required = false, HelpText = "Compile code in the Forth files to csfile.")]
+    [Option('o', "output [csfile]", Required = false, HelpText = "Compile code in the Forth files to an image file.")]
     public string? Output {get; set;}
 
     [Value(0, MetaName="Forth files", HelpText = "Optional Forth files to compile or execute.")]

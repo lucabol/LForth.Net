@@ -7,16 +7,16 @@ using static Forth.Utils;
 
 public enum Op {
     Error , Colo,  Does, Plus, Minu, Mult, Divi, Prin, Base,
-    Count, Word, Refill, Comma, Here, At, Store, State, Bl, Dup, Exit, Immediate,
+    Count, Word, Parse, Refill, Comma, Here, At, Store, State, Bl, Dup, Exit, Immediate,
     Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit, Create, RDepth, Depth,
     Less, More, Equal, NotEqual, Do, Loop, LoopP, ToR, FromR, I, J, Leave, Cr,
-    Source, Type, Emit, Char, In, Over, And, Or, Allot, Cells, Exec,
+    Source, Type, Emit, Char, In, Over, And, Or, Allot, Cells, Exec, Invert, MulDivRem,
     IDebug, ISemi, IPostpone, IBegin, IDo, ILoop, ILoopP, IAgain, IIf, IElse, IThen,
-    IWhile, IRepeat, IBrakO, IBrakC, IChar,// End of 1 byte
+    IWhile, IRepeat, IBrakO, IBrakC, IChar, ILiteral, // End of 1 byte
     Branch0, RelJmp, ImmCall, // End of 2 byte size
     NumbEx, // End of CELL Size 
     Jmp , Numb, Call, // End of Var number
-    ICStr, ISStr, // End of string words
+    ICStr, ISStr, ISLit, // End of string words
     FirstHasVarNumb = Jmp, FirstHas2Size = Branch0, FirstHasCellSize = NumbEx,
     FirstStringWord = ICStr,
 }
@@ -77,6 +77,7 @@ public class Vm {
         { "interpret"   , Op.Interpret },
         { "quit"        , Op.Quit },
         { "word"        , Op.Word },
+        { "parse"       , Op.Parse },
         { ","           , Op.Comma },
         { "here"        , Op.Here },
         { "@"           , Op.At },
@@ -104,6 +105,8 @@ public class Vm {
         { "dup2"        , Op.Dup2 },
         { "drop"        , Op.Drop },
         { "drop2"       , Op.Drop2 },
+        { "*/mod"       , Op.MulDivRem },
+        { "invert"      , Op.Invert },
         { "exit"        , Op.Exit },
         { "i"           , Op.I },
         { "j"           , Op.J },
@@ -220,11 +223,23 @@ public class Vm {
                 herep += len + 1;
             };
         }
+        Action SEmbedString(Op op) { return () =>
+        {
+            PushOp(op);
+            var len = (Index)Pop();
+            Push(herep + 1);
+            Push(len);
+            CMove();
+            ds[herep] = (byte)len;
+            herep += len + 1;
+        };}
 
         ImmediateWords = new()
         {
             { "debug",      (Op.IDebug,     () => Debug = !Debug) },
             { "[char]",     (Op.IChar,      () => { Char(); PushOp(Op.Numb, Pop());}) },
+            { "literal",    (Op.ILiteral,       () => { PushOp(Op.Numb, Pop());}) },
+            { "sliteral",   (Op.ISLit,  SEmbedString(Op.ISLit)) },
             { "[",          (Op.IBrakO,     () => Executing = true) },
             { "]",          (Op.IBrakC,     () => Executing = false) },
             { ";",          (Op.ISemi,      () => { PushOp(Op.Exit);  Executing = true; }) },
@@ -614,6 +629,12 @@ public class Vm {
                 case Op.Type:
                     Console.Write(ToDotNetString());
                     break;
+                case Op.ISLit:
+                    count = ds[ip];
+                    Push(ip + 1);
+                    Push(count);
+                    ip += count + 1;
+                    break;
                 case Op.ImmCall:
                     var act = ImmediateAction((Op)ds[ip]);
                     if(act is null) Throw($"ImmCall with a non existing op: {(Op)ds[ip]}");
@@ -676,6 +697,9 @@ public class Vm {
                 case Op.Word:
                     WordW();
                     break;
+                case Op.Parse:
+                    Parse();
+                    break;
                 case Op.Comma:
                     Comma();
                     break;
@@ -696,6 +720,9 @@ public class Vm {
                     break;
                 case Op.Drop2:
                     Drop2();
+                    break;
+                case Op.MulDivRem:
+                    MulDivRem();
                     break;
                 case Op.Store:
                     Store();
@@ -762,6 +789,9 @@ public class Vm {
                     break;
                 case Op.RDepth:
                     Push(rp / CELL_SIZE);
+                    break;
+                case Op.Invert:
+                    Push(~Pop());
                     break;
                 case Op.Immediate:
                     Utils.SetHighBit(ref ds[LinkToLen(dictHead)]);
@@ -966,6 +996,15 @@ public class Vm {
         Push(x1);
         Push(x2);
     }
+    void MulDivRem()
+    {
+        var n3 = Pop();
+        var n2 = Pop();
+        var n1 = Pop();
+        (var n5, var n4) = Math.DivRem(n1 * n2, n3);
+        Push(n4);
+        Push(n5);
+    }
 
     /** It is implemented like this to avoid endianess problems **/
     void CFetch()
@@ -993,6 +1032,19 @@ public class Vm {
         var a = (Index)Pop();
         var s = new Span<AUnit>(ds, a, c);
         return Encoding.UTF8.GetString(s);
+    }
+    internal void Parse()
+    {
+        var delim = (byte) Pop();
+        ref var off = ref ds[inp]; 
+        var addr = source + off;
+        var startOff = off;
+
+        while(ds[source + off] != delim) off++;
+        off++;
+
+        Push(addr);
+        Push(off - startOff - 1);
     }
     /** TODO: the delimiter in this implemenation (and Forth) as to be one byte char, but UTF8 puts that into question **/
     internal void WordW(bool inKeyword = false)
