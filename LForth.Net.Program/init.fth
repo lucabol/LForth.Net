@@ -1,7 +1,7 @@
 ﻿: ( [char] ) parse drop drop ; immediate
 : \ 0 word drop ; immediate
 
-\ Some modfied from https://theforth.net/package/minimal/current-view/README.md
+\ Some modified from https://theforth.net/package/minimal/current-view/README.md
 : variable create 0 , ;
 : constant create , does> @ ;
 
@@ -17,17 +17,19 @@
 : hex 16 base ! ;
 : 2* 2 * ;
 : negate -1 * ;
+: d- - ;
 
 \ Stack
 : rot ( x1 x2 x3 -- x2 x3 x1 )  >r  swap r> swap ;
+: -rot ( x1 x2 x3 -- x3 x2 x1 )  rot rot ;
 : nip ( x1 x2 -- x2 )  swap drop ;
 : tuck ( x1 x2 -- x2 x1 x2 )  swap over ;
-: -rot ( x1 x2 x3 -- x3 x2 x1 )  rot rot ;
 : ?dup dup 0 <> if dup then ;
 : bounds ( addr1 u -- addr2 addr3 )  over + swap ;
 : 2dup ( d1 -- d1 d1 )  over over ;
 : 2swap ( d1 d2 -- d2 d1 )  >r rot rot r> rot rot ;
 : 2over ( d1 d2 -- d1 d2 d1 )  >r >r 2dup r> r> 2swap ;
+: um/mod 2dup mod -rot / ;
 
 \ Boolean
 0 constant false

@@ -75,6 +75,7 @@ void ValidateOptions(Options o) {
 string NextLine() {
     
         if(CursorLeft != 0) WriteLine();
+        ColorLine(ConsoleColor.Gray, vm.DotS());
 
         System.ReadLine.AutoCompletionHandler = new AutoCompletionHandler(vm);
 
@@ -97,14 +98,14 @@ void InterpretFile(string fileName)
 
     try {
         VWrite($"Interpreting file {fileName} ...");
-        var stream = File.OpenRead(fileName);
-        var reader = new StreamReader(stream);
+        using var stream = File.OpenRead(fileName);
+        using var reader = new StreamReader(stream);
         vm.NextLine = () => { lineNum++; lineText = reader.ReadLine()! ; return lineText; };
         vm.Quit();
         VWriteLine(" done.\n");
     } catch(Exception)
     {
-        ColorLine(ConsoleColor.Red, $"Line: {lineNum}\n{lineText}");
+        ColorLine(ConsoleColor.Red, $"File: {fileName} Line: {lineNum}\n{lineText}");
         throw; 
     }
 }

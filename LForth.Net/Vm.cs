@@ -11,6 +11,7 @@ public enum Op {
     Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit, Create, Body, RDepth, Depth,
     Less, More, Equal, NotEqual, Do, Loop, LoopP, ToR, FromR, I, J, Leave, Cr,
     Source, Type, Emit, Char, In, Over, And, Or, Allot, Cells, Exec, Invert, MulDivRem,
+    SaveSys, LoadSys, Included,
     IDebug, ISemi,  IBegin, IDo, ILoop, ILoopP, IAgain, IIf, IElse, IThen,
     IWhile, IRepeat, IBrakO, IBrakC,   // End of 1 byte
     Branch0, RelJmp, ImmCall, IPostponeOp,// End of 2 byte size
@@ -42,6 +43,8 @@ public class Vm {
     readonly Index pad;
     readonly Index strings;
 
+    private readonly int userStart;
+
     Index input_len_chars = 0;
 
     /** This is the base to interpret numbers. **/
@@ -58,7 +61,7 @@ public class Vm {
     AUnit[] ps;
     AUnit[] rs;
     AUnit[] ds;
-
+    readonly Index savedDictHead;
     readonly Index code = 0;
 
     Index dictHead;
@@ -78,6 +81,9 @@ public class Vm {
         { "quit"        , Op.Quit },
         { "word"        , Op.Word },
         { "parse"       , Op.Parse },
+        { "savesys"     , Op.SaveSys },
+        { "loadsys"     , Op.LoadSys },
+        { "included"    , Op.Included },
         { ","           , Op.Comma },
         { "here"        , Op.Here },
         { "@"           , Op.At },
@@ -127,7 +133,6 @@ public class Vm {
 
     /** While other words need to perfom more complicated actions at compile time **/
     readonly Dictionary<string, (Op, Action)> ImmediateWords = new();
-
     public Func<string>? NextLine = null;
 
     public Vm(
@@ -144,16 +149,16 @@ public class Vm {
         rs   = new AUnit[maxReturnStack];
         ds   = new AUnit[maxDataStack];
 
-        code = herep;
-        herep += CHAR_SIZE + CELL_SIZE;
+        code          = herep;
+        herep        += CHAR_SIZE + CELL_SIZE;
 
-        keyWord = herep;
-        herep += maxWord * CHAR_SIZE;
-        source  = herep;
-        herep += maxSource * CHAR_SIZE;
+        keyWord       = herep;
+        herep        += maxWord * CHAR_SIZE;
+        source        = herep;
+        herep        += maxSource * CHAR_SIZE;
 
-        word    = herep;
-        herep += maxWord * CHAR_SIZE;
+        word          = herep;
+        herep        += maxWord * CHAR_SIZE;
 
         pad              = herep;
         herep           += maxPad;
@@ -265,6 +270,9 @@ public class Vm {
             { "c\"",         (Op.ICStr, EmbedString(Op.ICStr)) },
             { "s\"",         (Op.ISStr, EmbedString(Op.ISStr)) },
         };
+        userStart = herep;
+        savedDictHead = herep;
+        herep        += CELL_SIZE;
     }
     public void Reset()
     {
@@ -341,6 +349,50 @@ public class Vm {
 
         if(value is not null) Write7BitEncodedCell(ds, code + 1, (Cell)value, out howMany);
         return howMany + 1;
+    }
+    void ColorLine(ConsoleColor color, string s) {
+        var backupcolor = Console.ForegroundColor;
+        Console.ForegroundColor = color;
+        Console.WriteLine(s);
+        Console.ForegroundColor = backupcolor;
+    }
+    void Included()
+    {
+
+        var lineNum = 0;
+        var lineText = "";
+
+        var fileName = ToDotNetString();
+        using var stream = File.OpenRead(fileName);
+        using var reader = new StreamReader(stream);
+        var backNext = NextLine;
+
+        try {
+            if (Debug) Console.Write($"Interpreting file {fileName} ...");
+            NextLine = () => { lineNum++; lineText = reader.ReadLine()! ; return lineText; };
+            Quit();
+            if (Debug) Console.WriteLine(" done.\n");
+        } catch(Exception)
+        {
+            ColorLine(ConsoleColor.Red, $"File: {fileName} Line: {lineNum}\n{lineText}");
+            throw; 
+        } finally
+        {
+            NextLine = backNext;
+        }
+    }
+    void SaveSystem()
+    {
+        WriteCell(ds, savedDictHead, dictHead);
+        var fileName = ToDotNetString();
+        File.WriteAllBytes(fileName, ds[userStart .. herep]);
+    }
+    void LoadSystem()
+    {
+        var fileName = ToDotNetString();
+        var buf      = File.ReadAllBytes(fileName);
+        buf.CopyTo(ds, userStart);
+        dictHead = (Index)ReadCell(ds, savedDictHead);
     }
     void PushUntilExit(ref Index ip)
     {
@@ -587,7 +639,7 @@ public class Vm {
             }
         }
     }
-    internal string DotS()
+    public string DotS()
     {
         StringBuilder sb = new();
         sb.Append($"<{sp / CELL_SIZE}> ");
@@ -707,6 +759,15 @@ public class Vm {
                     break;
                 case Op.Comma:
                     Comma();
+                    break;
+                case Op.SaveSys:
+                    SaveSystem();
+                    break;
+                case Op.LoadSys:
+                    LoadSystem();
+                    break;
+                case Op.Included:
+                    Included();
                     break;
                 case Op.Here:
                     Here();
