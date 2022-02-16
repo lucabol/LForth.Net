@@ -1,5 +1,7 @@
 ﻿: ( [char] ) parse drop drop ; immediate
 : \ 0 word drop ; immediate
+
+\ Some modfied from https://theforth.net/package/minimal/current-view/README.md
 : variable create 0 , ;
 : constant create , does> @ ;
 
@@ -22,6 +24,10 @@
 : tuck ( x1 x2 -- x2 x1 x2 )  swap over ;
 : -rot ( x1 x2 x3 -- x3 x2 x1 )  rot rot ;
 : ?dup dup 0 <> if dup then ;
+: bounds ( addr1 u -- addr2 addr3 )  over + swap ;
+: 2dup ( d1 -- d1 d1 )  over over ;
+: 2swap ( d1 d2 -- d2 d1 )  >r rot rot r> rot rot ;
+: 2over ( d1 d2 -- d1 d2 d1 )  >r >r 2dup r> r> 2swap ;
 
 \ Boolean
 0 constant false
@@ -41,7 +47,22 @@ false invert constant true
 : char+ ( c-addr1 -- c-addr2 )  1 chars + ;
 : cell+ ( addr1 -- addr2 )  1 cells + ;
 : aligned ( addr -- a-addr )  cell+ 1 -   1 cells 1 - invert  and ;
+: 2! ( d addr -- )   SWAP OVER ! CELL+ ! ;
+: 2@ ( addr -- d )  DUP CELL+ @ SWAP @ ;
 
 \ Compiler
 : ' bl word find drop ;
 : ['] ' postpone literal ; immediate
+: value ( -- )  create , does> @ ;
+: defer ( "<spaces>name" -- )  create 0 , does> @ execute ;
+: to ( x "<spaces>name" -- ) 
+   state @ 
+   if  postpone [']  postpone >body postpone !  
+   else ' >body ! then ; immediate
+
+: is ( x "<spaces>name" -- ) 
+   state @ if  postpone to  else ['] to execute  then ; immediate
+
+\ Strings
+: space ( -- )  bl emit ;
+: spaces ( u -- ) dup 0 > if  begin dup while  space 1 -  repeat  then  drop ;

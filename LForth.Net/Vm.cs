@@ -6,16 +6,16 @@ using static Forth.Utils;
 
 
 public enum Op {
-    Error , Colo,  Does, Plus, Minu, Mult, Divi, Prin, Base,
+    Error , Colo,  Does, Plus, Minu, Mult, Divi, Prin, Base, Noop,
     Count, Word, Parse, Refill, Comma, Here, At, Store, State, Bl, Dup, Exit, Immediate,
-    Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit, Create, RDepth, Depth,
+    Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit, Create, Body, RDepth, Depth,
     Less, More, Equal, NotEqual, Do, Loop, LoopP, ToR, FromR, I, J, Leave, Cr,
     Source, Type, Emit, Char, In, Over, And, Or, Allot, Cells, Exec, Invert, MulDivRem,
-    IDebug, ISemi, IPostpone, IBegin, IDo, ILoop, ILoopP, IAgain, IIf, IElse, IThen,
-    IWhile, IRepeat, IBrakO, IBrakC, IChar, ILiteral, // End of 1 byte
-    Branch0, RelJmp, ImmCall, // End of 2 byte size
+    IDebug, ISemi,  IBegin, IDo, ILoop, ILoopP, IAgain, IIf, IElse, IThen,
+    IWhile, IRepeat, IBrakO, IBrakC,   // End of 1 byte
+    Branch0, RelJmp, ImmCall, IPostponeOp,// End of 2 byte size
     NumbEx, // End of CELL Size 
-    Jmp , Numb, Call, // End of Var number
+    Jmp , Numb, Call, IPostponeCall, ILiteral, IChar,// End of Var number
     ICStr, ISStr, ISLit, // End of string words
     FirstHasVarNumb = Jmp, FirstHas2Size = Branch0, FirstHasCellSize = NumbEx,
     FirstStringWord = ICStr,
@@ -97,6 +97,7 @@ public class Vm {
         { "<>"          , Op.NotEqual },
         { "create"      , Op.Create },
         { "does>"       , Op.Does },
+        { ">body"       , Op.Body },
         { "rdepth"      , Op.RDepth },
         { "swap"        , Op.Swap },
         { "depth"       , Op.Depth },
@@ -123,8 +124,6 @@ public class Vm {
         { "find"        , Op.Find },
         { "execute"     , Op.Exec },
     };
-    /** The xts are created on demand **/
-    readonly Dictionary<Op, Index> xts = new();
 
     /** While other words need to perfom more complicated actions at compile time **/
     readonly Dictionary<string, (Op, Action)> ImmediateWords = new();
@@ -239,11 +238,11 @@ public class Vm {
             { "debug",      (Op.IDebug,     () => Debug = !Debug) },
             { "[char]",     (Op.IChar,      () => { Char(); PushOp(Op.Numb, Pop());}) },
             { "literal",    (Op.ILiteral,       () => { PushOp(Op.Numb, Pop());}) },
-            { "sliteral",   (Op.ISLit,  SEmbedString(Op.ISLit)) },
+            { "sliteral",   (Op.ISLit,      SEmbedString(Op.ISLit)) },
             { "[",          (Op.IBrakO,     () => Executing = true) },
             { "]",          (Op.IBrakC,     () => Executing = false) },
             { ";",          (Op.ISemi,      () => { PushOp(Op.Exit);  Executing = true; }) },
-            { "postpone",   (Op.IPostpone,  Postpone) },
+            { "postpone",   (Op.IPostponeCall,  Postpone) },
             { "begin",      (Op.IBegin,     Mark) },
             { "do",         (Op.IDo,        () => { PushOp(Op.Do); herep += CELL_SIZE; Mark(); }) },
             { "loop",       (Op.ILoop,      EmbedHereJmp0Bck)},
@@ -323,11 +322,13 @@ public class Vm {
             b = (byte) char.ToLowerInvariant((char)b); 
     }
     void PushOp(Op op) {
+        if(Debug) Console.Write($"C:{op} ");
         ds[herep] = (Code)op;
         herep++;
     }
     Index PushOp(Op op, Cell value)
     {
+        if(Debug) Console.Write($"C:{op}:{value} ");
         PushOp(op);
         Write7BitEncodedCell(ds, herep, value, out var howMany);
         herep += howMany;
@@ -382,19 +383,13 @@ public class Vm {
         // Look for simple statements
         if(WordToSimpleOp.TryGetValue(sl, out var op))
         {
-            if(xts.TryGetValue(op, out var xt))
-                Ret(xt, -1);
-            else
-                RetNewOp(op);
+            RetNewOp(op);
             return;
         }
         // Look for immediate words
         if(ImmediateWords.TryGetValue(sl, out var imm))
         {
-            if(xts.TryGetValue(imm.Item1, out var xt))
-                Ret(xt, 1);
-            else
-                RetNewImmediateOp(imm.Item1);
+            RetNewImmediateOp(imm.Item1);
             return;
         }
         // Getting here, we return the result of FindUserDefinedWord. Below utility funcs.
@@ -404,8 +399,7 @@ public class Vm {
             PushOp(Op.ImmCall);
             PushOp(op);
             PushOp(Op.Exit);
-            Ret(herep, 1);
-            xts.Add(op, xt);
+            Ret(xt, 1);
         }
         void RetNewOp(Op op)
         {
@@ -413,7 +407,6 @@ public class Vm {
             PushOp(op);
             PushOp(Op.Exit);
             Ret(xt, -1);
-            xts.Add(op, xt);
         }
         void Ret(Index xt, Cell f)
         {
@@ -479,17 +472,20 @@ public class Vm {
         Dup();
         var sl = ToDotNetStringC();
 
-        Find();
+        FindUserDefinedWord();
+
         var res = Pop();
         var xt    = (Index)Pop();
 
         if(res != FALSE) {
-            PushOp(Op.Call, xt);
+            PushOp(Op.IPostponeCall, xt);
             return;
         }
 
         if(WordToSimpleOp.TryGetValue(sl, out var op)) {
+            PushOp(Op.IPostponeOp);
             PushOp(op);
+            PushOp(Op.Noop);
             return;
         }
 
@@ -497,7 +493,6 @@ public class Vm {
             PushOp(imm.Item1);
             return;
         }
-
         Throw($"{sl: don't know this word.}");
     }
     bool InterpretWord()
@@ -612,6 +607,7 @@ public class Vm {
 
         do {
             var currentOp = (Op)ds[ip];
+            if(Debug) Console.Write($"E: {currentOp} ");
             ip++;
             Cell n, flag, index, limit, incr ;
             Index count, idx;
@@ -635,11 +631,20 @@ public class Vm {
                     Push(count);
                     ip += count + 1;
                     break;
+                case Op.IPostponeCall:
+                    n = Read7BitEncodedCell(ds, ip, out count);
+                    PushOp(Op.Call, n);
+                    ip += count;
+                    break;
+                case Op.IPostponeOp:
+                    PushOp((Op)ds[ip]);
+                    ip += 2; // There is a noop here to classify this as 2 bytes operation.
+                    break;
                 case Op.ImmCall:
                     var act = ImmediateAction((Op)ds[ip]);
                     if(act is null) Throw($"ImmCall with a non existing op: {(Op)ds[ip]}");
                     act();
-                    ip = (Index)RPop();
+                    ip++;
                     break;
                 case Op.Allot:
                     herep += (Index)Pop();
@@ -800,6 +805,9 @@ public class Vm {
                     var d = Pop();
                     var u = Pop();
                     Push(u / d);
+                    break;
+                case Op.Body:
+                    Push(Pop() + 1 + CELL_SIZE); // See create below.
                     break;
                 case Op.Create:
                     Push(' ');
