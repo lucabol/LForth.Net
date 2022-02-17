@@ -2,6 +2,7 @@ namespace Forth;
 
 using System.Collections;
 using System.Diagnostics.CodeAnalysis;
+using System.Reflection;
 using static Forth.Utils;
 
 
@@ -11,7 +12,7 @@ public enum Op {
     Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit, Create, Body, RDepth, Depth,
     Less, More, Equal, NotEqual, Do, Loop, LoopP, ToR, FromR, I, J, Leave, Cr,
     Source, Type, Emit, Char, In, Over, And, Or, Allot, Cells, Exec, Invert, MulDivRem,
-    Save, Load, SaveSys, LoadSys, Included,
+    Save, Load, SaveSys, LoadSys, Included, DType, DCall, DMethod,
     IDebug, ISemi,  IBegin, IDo, ILoop, ILoopP, IAgain, IIf, IElse, IThen,
     IWhile, IRepeat, IBrakO, IBrakC,   // End of 1 byte
     Branch0, RelJmp, ImmCall, IPostponeOp,// End of 2 byte size
@@ -131,11 +132,17 @@ public class Vm {
         { ">in"         , Op.In },
         { "find"        , Op.Find },
         { "execute"     , Op.Exec },
+        { ".net>type"   , Op.DType },
+        { ".net>method" , Op.DMethod },
+        { ".net>call"   , Op.DCall },
     };
 
     /** While other words need to perfom more complicated actions at compile time **/
     readonly Dictionary<string, (Op, Action)> ImmediateWords = new();
     public Func<string>? NextLine = null;
+
+    Type lastType = typeof(Console);
+    MethodInfo? lastMethod;
 
     public Vm(
         Index maxParameterStack = Config.SmallStack,
@@ -219,13 +226,14 @@ public class Vm {
                 PushOp(op);
 
                 Push('"');
-                WordW();
-                Index len = ds[Peek()];
-                Push(herep);
-                Push(len + 1);
+                Parse();
+                var len = (Index)Peek();
+                Push(herep + 1);
+                Swap();
                 CMove();
                 if(Executing && op == Op.ICStr) Push(herep);
                 if(Executing && op == Op.ISStr) { Push(herep + 1); Push(len); }
+                ds[herep] = (byte)len;
                 herep += len + 1;
             };
         }
@@ -273,12 +281,23 @@ public class Vm {
             { "s\"",         (Op.ISStr, EmbedString(Op.ISStr)) },
         };
 
-        FromDotNetString("init.fth");
-        Included();
-
         userStart = herep;
         savedDictHead = herep;
         herep        += CELL_SIZE;
+
+        if(File.Exists("init.io"))
+        {
+            FromDotNetString("init.io");
+            LoadSystem(true);
+        } else if(File.Exists("init.fth")) {
+            FromDotNetString("init.fth");
+            Included();
+        } else
+        {
+            Console.WriteLine("No init file loaded.");
+        }
+        Reset();
+
     }
     public void Reset()
     {
@@ -356,7 +375,7 @@ public class Vm {
         if(value is not null) Write7BitEncodedCell(ds, code + 1, (Cell)value, out howMany);
         return howMany + 1;
     }
-    void ColorLine(ConsoleColor color, string s) {
+    static void ColorLine(ConsoleColor color, string s) {
         var backupcolor = Console.ForegroundColor;
         Console.ForegroundColor = color;
         Console.WriteLine(s);
@@ -393,6 +412,7 @@ public class Vm {
         WriteCell(ds, savedDictHead, dictHead);
         var fileName = ToDotNetString();
         File.WriteAllBytes(fileName, ds[start .. herep]);
+        Console.WriteLine($"Saved in file {Path.Join(Environment.CurrentDirectory, fileName)} .");
     }
     void LoadSystem(bool all = false)
     {
@@ -401,6 +421,8 @@ public class Vm {
         var buf      = File.ReadAllBytes(fileName);
         buf.CopyTo(ds, start);
         dictHead = (Index)ReadCell(ds, savedDictHead);
+        herep = buf.Length;
+        Console.WriteLine($"Loaded from file {Path.Join(Environment.CurrentDirectory, fileName)}");
     }
     void PushUntilExit(ref Index ip)
     {
@@ -649,6 +671,8 @@ public class Vm {
     }
     public string DotS()
     {
+        if(sp == 0) return "";
+
         StringBuilder sb = new();
         sb.Append($"<{sp / CELL_SIZE}> ");
         for (int i = 0; i < sp; i += CELL_SIZE)
@@ -708,6 +732,20 @@ public class Vm {
                     break;
                 case Op.Allot:
                     herep += (Index)Pop();
+                    break;
+                case Op.DType:
+                    var typeName = ToDotNetString();
+                    var aType = Type.GetType(typeName);
+                    if(aType is null) Throw($"Cannot find type {typeName}");
+                    lastType = aType;
+                    break;
+                case Op.DMethod:
+                    var methodName = ToDotNetString();
+                    lastMethod = lastType.GetMethod(methodName);
+                    if(lastMethod is null) Throw($"No method {methodName} on type {lastType.Name}");
+                    break;
+                case Op.DCall:
+                    DCall();
                     break;
                 case Op.Cells:
                     Push(Pop() * CELL_SIZE);
@@ -1089,6 +1127,21 @@ public class Vm {
         Push(n5);
     }
 
+    void DCall()
+    {
+        if(lastMethod is null) Throw($"No method UNKNOWN on type {lastType.Name}");
+        var args = lastMethod.GetParameters().Reverse();
+        var objs =
+            args.Select<ParameterInfo, object>(p => p.ParameterType == typeof(string) ? ToDotNetString() : (Cell) Pop());
+        var res = lastMethod.Invoke(null, objs.Reverse().ToArray());
+        if(res is null)
+            Throw("null returned from this invocation.");
+        else
+            if(res.GetType() == typeof(string))
+                FromDotNetString((string)res);
+            else
+                Push(Convert.ToInt64(res));
+    }
     /** It is implemented like this to avoid endianess problems **/
     void CFetch()
     {

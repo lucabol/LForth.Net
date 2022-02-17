@@ -68,3 +68,10 @@ false invert constant true
 \ Strings
 : space ( -- )  bl emit ;
 : spaces ( u -- ) dup 0 > if  begin dup while  space 1 -  repeat  then  drop ;
+
+\ .net inteop samples
+: .net ( type-s-addr type-c methodName-s-addr method-name-c -- ** )
+	2swap .net>type .net>method .net>call ;
+
+: escape s" System.Uri, System" s" EscapeDataString" .net ;
+: sqrt s" System.Math" s" Sqrt" .net ;

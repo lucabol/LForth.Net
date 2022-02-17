@@ -17,6 +17,7 @@ void Run(Options o) {
 
     ValidateOptions(o);
 
+
     foreach (var fileName in o.Files)
         InterpretFile(fileName);
 
@@ -73,7 +74,8 @@ void ValidateOptions(Options o) {
 string NextLine() {
     
         if(CursorLeft != 0) WriteLine();
-        ColorLine(ConsoleColor.Gray, vm.DotS());
+        var helpLine = vm.DotS();
+        if(helpLine != "") ColorLine(ConsoleColor.Gray, helpLine);
 
         System.ReadLine.AutoCompletionHandler = new AutoCompletionHandler(vm);
 
