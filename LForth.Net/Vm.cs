@@ -11,7 +11,7 @@ public enum Op {
     Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit, Create, Body, RDepth, Depth,
     Less, More, Equal, NotEqual, Do, Loop, LoopP, ToR, FromR, I, J, Leave, Cr,
     Source, Type, Emit, Char, In, Over, And, Or, Allot, Cells, Exec, Invert, MulDivRem,
-    SaveSys, LoadSys, Included,
+    Save, Load, SaveSys, LoadSys, Included,
     IDebug, ISemi,  IBegin, IDo, ILoop, ILoopP, IAgain, IIf, IElse, IThen,
     IWhile, IRepeat, IBrakO, IBrakC,   // End of 1 byte
     Branch0, RelJmp, ImmCall, IPostponeOp,// End of 2 byte size
@@ -81,6 +81,8 @@ public class Vm {
         { "quit"        , Op.Quit },
         { "word"        , Op.Word },
         { "parse"       , Op.Parse },
+        { "save"        , Op.Save },
+        { "load"        , Op.Load },
         { "savesys"     , Op.SaveSys },
         { "loadsys"     , Op.LoadSys },
         { "included"    , Op.Included },
@@ -270,6 +272,10 @@ public class Vm {
             { "c\"",         (Op.ICStr, EmbedString(Op.ICStr)) },
             { "s\"",         (Op.ISStr, EmbedString(Op.ISStr)) },
         };
+
+        FromDotNetString("init.fth");
+        Included();
+
         userStart = herep;
         savedDictHead = herep;
         herep        += CELL_SIZE;
@@ -381,17 +387,19 @@ public class Vm {
             NextLine = backNext;
         }
     }
-    void SaveSystem()
+    void SaveSystem(bool all = false)
     {
+        var start = all ? 0 : userStart ;
         WriteCell(ds, savedDictHead, dictHead);
         var fileName = ToDotNetString();
-        File.WriteAllBytes(fileName, ds[userStart .. herep]);
+        File.WriteAllBytes(fileName, ds[start .. herep]);
     }
-    void LoadSystem()
+    void LoadSystem(bool all = false)
     {
+        var start = all ? 0 : userStart ;
         var fileName = ToDotNetString();
         var buf      = File.ReadAllBytes(fileName);
-        buf.CopyTo(ds, userStart);
+        buf.CopyTo(ds, start);
         dictHead = (Index)ReadCell(ds, savedDictHead);
     }
     void PushUntilExit(ref Index ip)
@@ -760,11 +768,17 @@ public class Vm {
                 case Op.Comma:
                     Comma();
                     break;
-                case Op.SaveSys:
+                case Op.Save:
                     SaveSystem();
                     break;
-                case Op.LoadSys:
+                case Op.Load:
                     LoadSystem();
+                    break;
+                case Op.SaveSys:
+                    SaveSystem(true);
+                    break;
+                case Op.LoadSys:
+                    LoadSystem(true);
                     break;
                 case Op.Included:
                     Included();
@@ -1088,6 +1102,13 @@ public class Vm {
         var start = (Index) Pop();
         Push(start + 1);
         Push(ds[start]);
+    }
+    void FromDotNetString(string s)
+    {
+        var bytes = Encoding.UTF8.GetBytes(s);
+        bytes.CopyTo(ds, strings);
+        Push(strings);
+        Push(bytes.Length);
     }
     internal string ToDotNetStringC()
     {

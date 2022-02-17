@@ -17,8 +17,6 @@ void Run(Options o) {
 
     ValidateOptions(o);
 
-    InterpretFile("init.fth");
-
     foreach (var fileName in o.Files)
         InterpretFile(fileName);
 
