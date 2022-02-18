@@ -70,7 +70,7 @@ public class UnitTest1
         var flag = vm.Pop();
         Assert.Equal(-1, flag);
         vm.Source();
-        Assert.Equal(s, vm.ToDotNetString());
+        Assert.Equal(s.Trim(), vm.ToDotNetString());
         
         EmptyStack(vm);
     }

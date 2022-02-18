@@ -22,4 +22,15 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+	<PropertyGroup>
+		<PackAsTool>true</PackAsTool>
+		<ToolCommandName>nforth</ToolCommandName>
+		<PackageOutputPath>./nupkg</PackageOutputPath>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+		<Description>Forth for .Net (library, CLI and Interpret).</Description>
+		<Copyright>2020 Ⓒ Luca Bolognese </Copyright>
+		<Authors>Luca Bolognese</Authors>
+		<VersionPrefix>2.0.00</VersionPrefix>	
+	</PropertyGroup>
 </Project>
