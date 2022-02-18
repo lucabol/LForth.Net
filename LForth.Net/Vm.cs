@@ -1,6 +1,5 @@
 namespace Forth;
 
-using System.Collections;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using static Forth.Utils;
@@ -8,11 +7,11 @@ using static Forth.Utils;
 
 public enum Op {
     Error , Colo,  Does, Plus, Minu, Mult, Divi, Prin, Base, Noop,
-    Count, Word, Parse, Refill, Comma, Here, At, Store, State, Bl, Dup, Exit, Immediate,
+    Count, Word, Parse, Refill, Comma, CComma, Here, At, Store, State, Bl, Dup, Exit, Immediate,
     Swap, Dup2, Drop, Drop2, Find, Bye, DotS, Interpret, Quit, Create, Body, RDepth, Depth,
     Less, More, Equal, NotEqual, Do, Loop, LoopP, ToR, FromR, I, J, Leave, Cr,
     Source, Type, Emit, Char, In, Over, And, Or, Allot, Cells, Exec, Invert, MulDivRem,
-    Save, Load, SaveSys, LoadSys, Included, DType, DCall, DMethod,
+    Save, Load, SaveSys, LoadSys, Included, DType, DCall, DMethod, CAt, Pad,
     IDebug, ISemi,  IBegin, IDo, ILoop, ILoopP, IAgain, IIf, IElse, IThen,
     IWhile, IRepeat, IBrakO, IBrakC,   // End of 1 byte
     Branch0, RelJmp, ImmCall, IPostponeOp,// End of 2 byte size
@@ -88,8 +87,11 @@ public class Vm {
         { "loadsys"     , Op.LoadSys },
         { "included"    , Op.Included },
         { ","           , Op.Comma },
+        { "c,"          , Op.CComma },
         { "here"        , Op.Here },
         { "@"           , Op.At },
+        { "c@"          , Op.CAt },
+        { "pad"         , Op.Pad },
         { "!"           , Op.Store },
         { "state"       , Op.State },
         { "bl"          , Op.Bl },
@@ -671,14 +673,13 @@ public class Vm {
     }
     public string DotS()
     {
-        if(sp == 0) return "";
-
-        StringBuilder sb = new();
-        sb.Append($"<{sp / CELL_SIZE}> ");
+        StringBuilder sb = new("Stack: ");
+        //sb.Append($"<{sp / CELL_SIZE}> ");
         for (int i = 0; i < sp; i += CELL_SIZE)
         {
             sb.Append(ReadCell(ps, i)); sb.Append(' ');
         }
+        if(sp == 0) sb.Append("empty");
         return sb.ToString();
     }
     internal void Bl()    => Push(' ');
@@ -806,6 +807,10 @@ public class Vm {
                 case Op.Comma:
                     Comma();
                     break;
+                case Op.CComma:
+                    ds[herep] = (byte) Pop();
+                    herep++;
+                    break;
                 case Op.Save:
                     SaveSystem();
                     break;
@@ -832,6 +837,12 @@ public class Vm {
                     break;
                 case Op.At:
                     At();
+                    break;
+                case Op.CAt:
+                    CFetch();
+                    break;
+                case Op.Pad:
+                    Push(pad);
                     break;
                 case Op.Drop:
                     Drop();

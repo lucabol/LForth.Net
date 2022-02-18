@@ -4,7 +4,8 @@ using static System.Console;
 using CommandLine;
 using CommandLine.Text;
 
-var verbose = false;
+var verbose      = false;
+Options? options = null;
 
 Vm vm = new();
 var parser       = new CommandLine.Parser(with => with.HelpWriter = null);
@@ -15,8 +16,8 @@ parserResult
 
 void Run(Options o) {
 
-    ValidateOptions(o);
-
+    options = o;
+    verbose = options.Verbose;
 
     foreach (var fileName in o.Files)
         InterpretFile(fileName);
@@ -63,19 +64,10 @@ static void DisplayHelp<T>(ParserResult<T> result, IEnumerable<Error> errs)
   Console.WriteLine(helpText);
 }
 
-void ValidateOptions(Options o) {
-    if(o.Output != null && (o.Files == null || !o.Files.Any())) {
-        WriteLine("You say you want to compile, but didn't pass any files.");
-        Environment.Exit(1);
-    }
-    verbose = o.Verbose;
-}
-
 string NextLine() {
     
         if(CursorLeft != 0) WriteLine();
-        var helpLine = vm.DotS();
-        if(helpLine != "") ColorLine(ConsoleColor.Gray, helpLine);
+        if(!options.HideStack) ColorLine(ConsoleColor.Gray, vm.DotS());
 
         System.ReadLine.AutoCompletionHandler = new AutoCompletionHandler(vm);
 
@@ -140,12 +132,12 @@ class Options {
     [Option('e', "exec [forthstring]", Required = false, HelpText = "Execute forthstring after starting up.")]
     public string? Exec {get; set;}
 
-    [Option('o', "output [csfile]", Required = false, HelpText = "Compile code in the Forth files to an image file.")]
-    public string? Output {get; set;}
-
     [Value(0, MetaName="Forth files", HelpText = "Optional Forth files to compile or execute.")]
     public IEnumerable<string>? Files {get; set;}
 
     [Option('v', "verbose", Required = false, HelpText = "Produce verbose output.")]
     public bool Verbose {get; set;} = false;
+
+    [Option('s', "hidestack", Required = false, HelpText = "Hides the stack banner.")]
+    public bool HideStack {get; set;} = false;
 }
